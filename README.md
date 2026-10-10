@@ -1,115 +1,49 @@
-English | [中文](README-zh.md)
+# opencode-vibeguard (OpenCode V2)
 
-[![npm](https://img.shields.io/npm/v/opencode-vibeguard)](https://www.npmjs.com/package/opencode-vibeguard)
-[![downloads](https://img.shields.io/npm/dm/opencode-vibeguard)](https://www.npmjs.com/package/opencode-vibeguard)
-[![license](https://img.shields.io/github/license/inkdust2021/opencode-vibeguard)](LICENSE)
-[![node](https://img.shields.io/node/v/opencode-vibeguard)](https://www.npmjs.com/package/opencode-vibeguard)
+Fork of [inkdust2021/opencode-vibeguard](https://github.com/inkdust2021/opencode-vibeguard) ported to the OpenCode V2 plugin API. V1 is not supported; use upstream for V1.
 
-# opencode-vibeguard
+What it does:
 
-Inspired by [VibeGuard](https://github.com/inkdust2021/VibeGuard).
+- Before every LLM request (main loop, title, compaction, generate) it replaces secrets in the system prompt, messages and historical tool input/output with placeholders like `__VG_GITHUB_TOKEN_1a2b3c4d5e6f__`. The provider never sees the plaintext.
+- A guard inspects every outgoing request body and blocks it if any rule still matches or a known secret is still there.
+- Before a tool runs, placeholders in its arguments are replaced with the real values, so `bash`, `write`, `edit` and MCP tools work with real data. `websearch` keeps the placeholder.
+- Fail-closed: a broken config, an unreadable key or an internal error blocks the request instead of sending it.
 
-![Screenshot](./screenshot.png)
+## Install
 
-An OpenCode plugin that:
-
-- Replaces configured sensitive strings with placeholders **before requests are sent to the LLM provider** (the provider never sees plaintext)
-- Restores placeholders back to the original text **after the model output completes** (more natural local display/persistence)
-- Restores placeholders **before tool execution** (e.g. `bash` / `write` / `edit`) so local tools run with real values
-
-Note: OpenCode tool calls are stored in the DB with the **real executed args/output**. Before each request, this plugin also redacts **historical tool inputs/outputs** to prevent plaintext from being sent upstream in later turns.
-
-Placeholder format (aligned with VibeGuard):
-
-- Prefix: `__VG_`
-- Shape: `__VG_<CATEGORY>_<hash12>__` or `__VG_<CATEGORY>_<hash12>_<N>__`
-- `hash12` is the first 12 hex chars of `HMAC-SHA256(session-random secret, original)`, stable within a session and irreversible to the provider
-
-## Install / Use (local dev)
-
-1. Put this plugin directory in your project (e.g. `./opencode-vibeguard/`).
-2. Load it in your OpenCode config:
+`~/.config/opencode/opencode.jsonc`:
 
 ```jsonc
 {
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["file://./opencode-vibeguard/src/index.js"]
+  "plugins": ["opencode-vibeguard@git+https://github.com/BohdanParkhomenkoNix/opencode-vibeguard.git"]
 }
 ```
 
-3. Put `vibeguard.config.json` in your project root (copy from `vibeguard.config.json.example`).
+Update with `opencode plugin update`.
 
-> Safety note: to avoid unexpected modifications, the plugin becomes a no-op if the config file is missing or `enabled=false`.
+## Configure
 
-## Install / Use (npm)
+Copy `vibeguard.config.json.example` to `~/.config/opencode/vibeguard.config.json` and add your own strings under `patterns.keywords` (`{ "value": "...", "category": "NAME" }`) or regexes under `patterns.regex`.
 
-Reference the package name in `opencode.json` (OpenCode will auto-install it on first use):
+Lookup order, first match wins: `$OPENCODE_VIBEGUARD_CONFIG`, `<project>/vibeguard.config.json`, `<project>/.opencode/vibeguard.config.json`, `~/.config/opencode/vibeguard.config.json`. No config at all disables the plugin.
 
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-vibeguard"]
-}
-```
+Built-in rules: `openai_key`, `anthropic_key`, `github_token`, `aws_access_key`, `google_api_key`, `private_key`, `jwt`, `email`, `uuid`, `ipv4`, `mac`, `china_phone`, `china_id`.
 
-You can also pin a version:
+Placeholders are `HMAC-SHA256(key, value)` truncated to 12 hex chars. The key lives in `~/.config/opencode/vibeguard.key` (32 bytes, mode 0600, created on first run; override with `key_file`), so a secret keeps its placeholder across sessions and restarts.
 
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-vibeguard@0.1.0"]
-}
-```
+Set `"debug": true` to log one line per request: `kind=<kind> replaced=<n>` and `guard=clean|BLOCKED`. Secrets are never logged.
 
-Optional (manual) install via npm/pnpm/bun (useful for offline / reproducible setups):
+## Limits
+
+- Model replies on screen show placeholders; files and commands get the real values.
+- Tools receive real values, so a tool that sends data out (`curl` in `bash`) can send a secret. This plugin keeps secrets away from the LLM provider, not from tools.
+- Tool descriptions are not redacted; if one matches a rule, requests are blocked until the value is added to `patterns.exclude`.
+
+## Develop
 
 ```bash
-npm i -D opencode-vibeguard
-# or: pnpm add -D opencode-vibeguard
-# or: bun add -d opencode-vibeguard
+npm test          # unit tests, also run in CI
+npm run test:e2e  # real `opencode run --standalone` against a local mock provider; needs opencode V2 on PATH
 ```
 
-If you prefer to load from your local `node_modules`, use a `file://` plugin path:
-
-```jsonc
-{
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["file://./node_modules/opencode-vibeguard/src/index.js"]
-}
-```
-
-## Configuration
-
-Config lookup order (first match wins):
-
-1. Path specified by env var `OPENCODE_VIBEGUARD_CONFIG`
-2. Project root: `./vibeguard.config.json`
-3. Project `.opencode` dir: `./.opencode/vibeguard.config.json`
-4. Global dir: `~/.config/opencode/vibeguard.config.json`
-
-See `vibeguard.config.json.example` for an example.
-
-## Tests
-
-```bash
-cd opencode-vibeguard
-npm test
-```
-
-## Debug
-
-Enable debug logs (will not print any plaintext secrets; only config path and replace counts):
-
-```bash
-OPENCODE_VIBEGUARD_DEBUG=1 opencode .
-```
-
-Or set in `vibeguard.config.json`:
-
-```json
-{ "debug": true }
-```
-
-## Known limitations
-
-- During streaming (`text-delta`) the placeholder may briefly appear; it will be restored at `text-end`.
+License: MIT (upstream).
