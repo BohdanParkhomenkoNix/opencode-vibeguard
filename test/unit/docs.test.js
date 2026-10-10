@@ -30,12 +30,14 @@ test("README documents exclude by domain, ttl 0s and key permissions", () => {
   assert.match(readme, /readable by others[^\n]*0600/)
 })
 
-test("package version is 0.2.2", () => {
-  assert.equal(JSON.parse(read("package.json")).version, "0.2.2")
+test("package version is 0.2.3", () => {
+  assert.equal(JSON.parse(read("package.json")).version, "0.2.3")
 })
 
-test("README limits: JSON-encoded secrets are blocked, not masked; domain exclude is address-shaped only", () => {
+test("README limits: escaped secrets are masked; domain exclude is address-shaped only", () => {
   const readme = read("README.md")
-  assert.match(readme, /JSON-encoded[^\n]*block/)
+  assert.match(readme, /escaped text[^\n]*masked[^\n]*3 levels/)
+  assert.match(readme, /base64[^\n]*not detected/)
+  assert.doesNotMatch(readme, /JSON-encoded text[^\n]*is not masked/)
   assert.match(readme, /address- or host-shaped[^\n]*user:pass@localhost[^\n]*masked/)
 })

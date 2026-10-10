@@ -43,7 +43,7 @@ Set `"debug": true` to log one line per request: `kind=<kind> replaced=<n>` and 
 
 - Model replies on screen show placeholders; files and commands get the real values.
 - Tools receive real values, so a tool that sends data out (`curl` in `bash`) can send a secret. This plugin keeps secrets away from the LLM provider, not from tools.
-- A secret that appears only inside JSON-encoded text (for example a password in a notebook cell or an escaped JSON string in a tool result) is not masked; the guard detects it and will block the request, so the session must drop that message.
+- A secret inside escaped text (JSON strings, notebook cells, `read` output) is masked through up to 3 levels of JSON escaping, `\/` and `\uXXXX` included. Other JSON escape spellings (uppercase `\u00E4`-style hex, a doubly escaped `\/`) are still seen by the guard, which blocks the request; drop that message to continue. Deeper nesting and non-JSON encodings (base64, URL encoding) are not detected.
 - Tool descriptions are not redacted; if one matches a rule, requests are blocked until the value is added to `patterns.exclude`.
 
 ## Develop

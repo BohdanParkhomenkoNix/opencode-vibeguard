@@ -71,12 +71,12 @@ test("text that only looks like JSON is scanned as text", () => {
   assert.deepEqual(findLeak(body("[oops alice@corp.io"), patterns, session()), { category: "EMAIL" })
 })
 
-test("nesting deeper than 3 levels is not decoded", () => {
+test("nesting deeper than 3 JSON levels plus 3 escape levels is not decoded", () => {
   const s = session()
   const original = 'q"uote-secret-1'
   s.getOrCreatePlaceholder(original, "test")
-  assert.deepEqual(findLeak(body(nest(original, 3)), patterns, s), { category: "TEST" })
-  assert.equal(findLeak(body(nest(original, 4)), patterns, s), null)
+  assert.deepEqual(findLeak(body(nest(original, 6)), patterns, s), { category: "TEST" })
+  assert.equal(findLeak(body(nest(original, 7)), patterns, s), null)
 })
 
 test("the guard honours exclude by domain", () => {
@@ -90,4 +90,17 @@ test("deeply nested JSON inside a string does not crash the guard", () => {
   assert.equal(findLeak(body(deep), patterns, session()), null)
   assert.deepEqual(findLeak(body(`${deep} alice@corp.io`), patterns, session()), { category: "EMAIL" })
   assert.deepEqual(findLeak(JSON.stringify({ model: "m", messages: [{ role: "user", content: deep }, { role: "user", content: "alice@corp.io" }] }), patterns, session()), { category: "EMAIL" })
+})
+
+const secretValue = buildPatternSet({ regex: [{ pattern: String.raw`(?<=password["']?\s*[:=]\s*["']?)[A-Za-z0-9]{12,}`, category: "secret_value" }] })
+const readOutput = (value) => `Read file /tmp/nb.ipynb, lines 1-3\n1: {\n2:   "cells": [{"source": ["password = \\"${value}\\"\\n"]}]\n3: }`
+
+test("a rule match visible only after unescaping is caught", () => {
+  assert.deepEqual(findLeak(body(readOutput("Fake7pass9word12")), secretValue, session()), { category: "SECRET_VALUE" })
+})
+
+test("a known value written escaped inside non-JSON text is caught", () => {
+  const s = session()
+  s.getOrCreatePlaceholder('pa"ss-word-42', "test")
+  assert.deepEqual(findLeak(body('1: {"cmd": "echo pa\\"ss-word-42"}  trailing'), patterns, s), { category: "TEST" })
 })
