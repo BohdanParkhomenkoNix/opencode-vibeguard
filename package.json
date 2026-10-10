@@ -1,35 +1,17 @@
 {
   "name": "opencode-vibeguard",
-  "version": "0.1.0",
-  "description": "OpenCode 插件：参考 VibeGuard 的占位符格式（__VG_...__）在发送给 LLM 前脱敏、在响应完成后自动还原、在工具执行前还原参数",
+  "version": "0.2.0",
+  "description": "OpenCode V2 plugin: replaces secrets with __VG_ placeholders before requests reach the LLM provider and restores them before tools run",
   "type": "module",
   "main": "./src/index.js",
   "exports": "./src/index.js",
-  "files": [
-    "src",
-    "README-zh.md",
-    "vibeguard.config.json.example"
-  ],
+  "files": ["src", "README.md", "vibeguard.config.json.example"],
   "scripts": {
-    "test": "node --test",
-    "prepack": "npm test"
+    "test": "node --test test/unit/",
+    "test:e2e": "node --test --test-concurrency=1 --test-timeout=300000 test/e2e/"
   },
-  "keywords": [
-    "opencode",
-    "opencode-plugin",
-    "vibeguard",
-    "privacy",
-    "redaction",
-    "secrets",
-    "pii"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/inkdust2021/opencode-vibeguard.git"
-  },
-  "bugs": {
-    "url": "https://github.com/inkdust2021/opencode-vibeguard/issues"
-  },
-  "homepage": "https://github.com/inkdust2021/opencode-vibeguard#readme",
-  "license": "MIT"
+  "keywords": ["opencode", "opencode-plugin", "vibeguard", "privacy", "redaction", "secrets"],
+  "repository": { "type": "git", "url": "git+https://github.com/BohdanParkhomenkoNix/opencode-vibeguard.git" },
+  "license": "MIT",
+  "engines": { "node": ">=20" }
 }
