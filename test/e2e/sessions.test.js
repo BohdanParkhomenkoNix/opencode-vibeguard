@@ -57,7 +57,9 @@ test("compaction requests are clean too", async (t) => {
   assert.equal((await runOpencode(project, `Remember ${SECRET}.`, { session })).code, 0)
   const second = await runOpencode(project, "And now?", { session })
   assert.equal(second.code, 0, second.stderr.slice(-3000))
-  assert.ok(mock.requests.some((r) => COMPACTION_MARKER.test(r.raw)), "no compaction request seen")
+  const compaction = mock.requests.filter((r) => COMPACTION_MARKER.test(r.raw))
+  assert.ok(compaction.length > 0, "no compaction request seen")
+  assert.ok(compaction.some((r) => r.raw.includes("__VG_TEST_")), "compaction request lacks the placeholder")
   assertClean(mock)
 })
 
