@@ -70,3 +70,23 @@ test("a broken regex error never echoes the pattern text", () => {
   assert.match(error.message, /patterns\.regex\[0\] \(MINE\) is not a valid regex/)
   assert.doesNotMatch(error.message, /hunter2/)
 })
+
+function excluded(text, exclude) {
+  const found = []
+  redactText(text, buildPatternSet({ builtin: ["email"], exclude }), {
+    getOrCreatePlaceholder(original) { found.push(original); return "X" },
+  })
+  return found.sort()
+}
+
+test("exclude covers a domain and its subdomains, any case", () => {
+  assert.deepEqual(excluded("a@example.com b@mail.example.com C@Example.COM", ["example.com"]), [])
+})
+
+test("exclude does not cover lookalike domains", () => {
+  assert.deepEqual(excluded("a@notexample.com x@example.com.evil.io", ["example.com"]), ["a@notexample.com", "x@example.com.evil.io"])
+})
+
+test("exclude still matches an exact value", () => {
+  assert.deepEqual(excluded("git@github.com:org/repo.git a@b.io", ["git@github.com"]), ["a@b.io"])
+})

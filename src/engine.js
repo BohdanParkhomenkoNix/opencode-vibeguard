@@ -41,6 +41,18 @@ function insertCovered(covered, span) {
   return merged
 }
 
+/** An exact entry, or a match under that domain: `example.com` covers `a@example.com` and `a@mail.example.com`. */
+function isExcluded(original, exclude) {
+  if (exclude.size === 0) return false
+  const value = original.toLowerCase()
+  for (const entry of exclude) {
+    const x = entry.toLowerCase()
+    if (!x) continue
+    if (value === x || value.endsWith(`@${x}`) || value.endsWith(`.${x}`)) return true
+  }
+  return false
+}
+
 /**
  * 对输入文本进行脱敏替换，返回替换后的文本与命中信息。
  * 设计与 VibeGuard 的 redact 引擎一致：处理重叠命中，确保不会把占位符切碎。
@@ -65,7 +77,7 @@ export function redactText(input, patterns, session) {
       const end = pos + needle.length
       const original = text.slice(start, end)
       idx = end
-      if (patterns.exclude.has(original)) continue
+      if (isExcluded(original, patterns.exclude)) continue
       found.push({ start, end, original, category: rule.category })
     }
   }
@@ -80,7 +92,7 @@ export function redactText(input, patterns, session) {
       if (start < 0) continue
       const end = start + m[0].length
       const original = text.slice(start, end)
-      if (patterns.exclude.has(original)) continue
+      if (isExcluded(original, patterns.exclude)) continue
       found.push({ start, end, original, category: rule.category })
     }
   }

@@ -78,3 +78,9 @@ test("nesting deeper than 3 levels is not decoded", () => {
   assert.deepEqual(findLeak(body(nest(original, 3)), patterns, s), { category: "TEST" })
   assert.equal(findLeak(body(nest(original, 4)), patterns, s), null)
 })
+
+test("the guard honours exclude by domain", () => {
+  const byDomain = buildPatternSet({ builtin: ["email"], exclude: ["example.com"] })
+  assert.equal(findLeak(body("write to dev@Example.com"), byDomain, session()), null)
+  assert.deepEqual(findLeak(body("write to dev@notexample.com"), byDomain, session()), { category: "EMAIL" })
+})
