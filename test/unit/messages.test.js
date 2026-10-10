@@ -1,7 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mapStrings, redactStrings, restoreStrings, SKIP_KEYS } from "../../src/messages.js"
-import { buildPatternSet } from "../../src/patterns.js"
+import { mapStrings, redactRequest, redactStrings, restoreStrings, SKIP_KEYS } from "../../src/messages.js"
+import { BUILTIN_NAMES, buildPatternSet } from "../../src/patterns.js"
+import { findLeak } from "../../src/guard.js"
 import { PlaceholderSession } from "../../src/session.js"
 
 const SECRET = "hunter2-very-secret"
@@ -58,6 +59,80 @@ test("redaction is idempotent", () => {
   const once = JSON.stringify(msgs)
   assert.equal(redactStrings(msgs, patterns, s), 0)
   assert.equal(JSON.stringify(msgs), once)
+})
+
+test("a second pass over redacted text changes nothing, for every builtin and a lookbehind rule", () => {
+  const s = session()
+  const all = buildPatternSet({
+    builtin: BUILTIN_NAMES,
+    regex: [{ pattern: String.raw`(?<=API_KEY=)\S+`, category: "ENVKEY" }],
+  })
+  const samples = [
+    "mail dev.user@corp-example.io now",
+    "API_KEY=abcdef0123456789xyz",
+    "dsn postgres://app:pw0123456789@db.internal.io/app",
+    "sk-" + "a1B2c3D4e5F6g7H8i9J0k1L2",
+    "sk-ant-" + "a1B2c3D4e5F6g7H8i9J0k1L2",
+    "ghp_" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8",
+    "AKIA" + "ABCDEFGHIJKLMNOP",
+    "AIza" + "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R",
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----",
+    "eyJhbGciOiJIUzI1.eyJzdWIiOiIxMjM0.SflKxwRJSMeKKF2QT4",
+    "uuid 123e4567-e89b-12d3-a456-426614174000",
+    "host 10.20.30.40 mac 00:1a:2b:3c:4d:5e",
+    "phone 13812345678 id 11010519491231002X",
+  ]
+  const msgs = [{ content: samples.map((text) => ({ type: "text", text })) }]
+  assert.ok(redactStrings(msgs, all, s) > 0)
+  const once = JSON.stringify(msgs)
+  assert.equal(redactStrings(msgs, all, s), 0)
+  assert.equal(JSON.stringify(msgs), once)
+})
+
+test("an email-like rule does not match inside a placeholder", () => {
+  const s = session()
+  const email = buildPatternSet({ builtin: ["email"] })
+  const text = "x:__VG_T_0123456789ab__@host.io"
+  const msgs = [{ content: [{ type: "text", text }] }]
+  assert.equal(redactStrings(msgs, email, s), 0)
+  assert.equal(msgs[0].content[0].text, text)
+})
+
+test("a lookbehind rule does not re-wrap a placeholder that follows its context", () => {
+  const s = session()
+  const lookbehind = buildPatternSet({ regex: [{ pattern: String.raw`(?<=API_KEY=)\S+`, category: "ENVKEY" }] })
+  const text = "API_KEY=__VG_ENVKEY_0123456789ab__"
+  const msgs = [{ content: [{ type: "text", text }] }]
+  assert.equal(redactStrings(msgs, lookbehind, s), 0)
+  assert.equal(msgs[0].content[0].text, text)
+})
+
+test("text around a placeholder is still redacted", () => {
+  const s = session()
+  const ph = "__VG_T_0123456789ab__"
+  const msgs = [{ content: [{ type: "text", text: `${SECRET} ${ph} ${SECRET}` }] }]
+  redactStrings(msgs, patterns, s)
+  const out = msgs[0].content[0].text
+  assert.ok(!out.includes(SECRET))
+  assert.ok(out.includes(` ${ph} `))
+})
+
+test("a value learned from a context rule is hidden when it appears bare, before or after the context", () => {
+  const value = "Zq81LmNp4RtVw2Xy"
+  const s = session()
+  const lookbehind = buildPatternSet({ regex: [{ pattern: String.raw`(?<=API_KEY=)[A-Za-z0-9]{12,}`, category: "ENVKEY" }] })
+  const messages = [
+    { role: "user", content: [{ type: "text", text: `earlier output ${value}` }] },
+    { role: "user", content: [{ type: "text", text: `API_KEY=${value}` }] },
+    { role: "assistant", content: [toolResult(`${value}\n`)] },
+  ]
+  const system = [{ type: "text", text: `bare ${value}` }]
+  const replaced = redactRequest([system, messages], lookbehind, s)
+  assert.ok(replaced > 0)
+  const body = JSON.stringify({ system, messages })
+  assert.ok(!body.includes(value))
+  assert.equal(findLeak(body, lookbehind, s), null)
+  assert.equal(new Set(body.match(/__VG_ENVKEY_[0-9a-f]{12}__/g)).size, 1)
 })
 
 test("restore brings the value back and leaves unknown placeholders", () => {

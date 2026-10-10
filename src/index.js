@@ -1,7 +1,7 @@
 import { loadConfig } from "./config.js"
 import { findLeak } from "./guard.js"
 import { loadKey } from "./key.js"
-import { redactStrings, restoreStrings } from "./messages.js"
+import { redactRequest, restoreStrings } from "./messages.js"
 import { buildPatternSet } from "./patterns.js"
 import { restoreText } from "./restore.js"
 import { PlaceholderSession } from "./session.js"
@@ -14,10 +14,12 @@ export const REQUEST_HOOKS = ["context", "title", "compaction", "generate"]
 /** A secret never belongs in a query to a third-party search service. */
 export const NO_RESTORE_TOOLS = new Set(["websearch"])
 
+/** No readable body is an error, not an empty body: a guard that reads nothing checks nothing. */
 async function bodyText(request) {
-  if (!request) return ""
-  if (typeof request.clone === "function") return request.clone().text()
-  return typeof request.body === "string" ? request.body : ""
+  if (request && typeof request.clone === "function") return request.clone().text()
+  if (request && typeof request.text === "function") return request.text()
+  if (request && typeof request.body === "string") return request.body
+  throw new Error("vibeguard: cannot read the request body")
 }
 
 /** If OpenCode ever sends a request whose hook failed, it goes out empty. */
@@ -60,7 +62,7 @@ async function setup(ctx) {
       try {
         ready()
         state.session.cleanup()
-        const replaced = redactStrings(event.system, state.patterns, state.session) + redactStrings(event.messages, state.patterns, state.session)
+        const replaced = redactRequest([event.system, event.messages], state.patterns, state.session)
         debug(`kind=${name} replaced=${replaced}`)
       } catch (error) {
         block(event)

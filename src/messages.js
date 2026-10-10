@@ -1,5 +1,6 @@
 import { redactText } from "./engine.js"
 import { restoreText } from "./restore.js"
+import { getPlaceholderRegex } from "./session.js"
 
 /**
  * String fields that identify things rather than carry content. Rewriting them would break
@@ -53,8 +54,53 @@ export function mapStrings(root, fn, skip = NO_SKIP) {
   return changed
 }
 
+/**
+ * Applies fn to the text between placeholders only. A placeholder already in the history is a
+ * finished replacement: a rule matching inside it would wrap it in a second placeholder, and
+ * restore would then give a tool the inner placeholder instead of the value.
+ */
+function mapGaps(text, placeholders, fn) {
+  let out = ""
+  let last = 0
+  for (const m of text.matchAll(placeholders)) {
+    out += fn(text.slice(last, m.index)) + m[0]
+    last = m.index + m[0].length
+  }
+  return out + fn(text.slice(last))
+}
+
+function rulePass(root, patterns, session) {
+  const placeholders = getPlaceholderRegex(session.prefix)
+  return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => redactText(gap, patterns, session).text), SKIP_KEYS)
+}
+
+/**
+ * Replaces every value the session already knows with its existing placeholder, longest first.
+ * A context rule (a lookbehind) learns a value from one occurrence, but the same value turns up
+ * bare in tool output, and the guard blocks any known value it finds.
+ */
+function knownPass(root, session) {
+  const originals = [...session.knownEntries()].map(([original]) => original).filter(Boolean).sort((a, b) => b.length - a.length)
+  if (originals.length === 0) return 0
+  const known = new RegExp(originals.map((o) => o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g")
+  const placeholders = getPlaceholderRegex(session.prefix)
+  return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => gap.replace(known, (original) => session.lookupReverse(original))), SKIP_KEYS)
+}
+
+/** Redacts one tree: rules first, then the values they learned. Returns the number of strings changed. */
 export function redactStrings(root, patterns, session) {
-  return mapStrings(root, (text) => redactText(text, patterns, session).text, SKIP_KEYS)
+  return rulePass(root, patterns, session) + knownPass(root, session)
+}
+
+/**
+ * Redacts several trees of one request. The known-value pass runs only after every rule pass,
+ * because a bare value can sit in a tree walked before the tree where a rule first learns it.
+ */
+export function redactRequest(roots, patterns, session) {
+  let changed = 0
+  for (const root of roots) changed += rulePass(root, patterns, session)
+  for (const root of roots) changed += knownPass(root, session)
+  return changed
 }
 
 export function restoreStrings(root, session) {
