@@ -30,6 +30,16 @@ function createKey(file, fs) {
   }
 }
 
+/** The key turns placeholders back into guesses for short secrets: nobody else may read it. */
+function ensureOwnerOnly(file, fs) {
+  if ((fs.statSync(file).mode & 0o077) === 0) return
+  try {
+    fs.chmodSync(file, 0o600)
+  } catch (error) {
+    throw new Error(`key file ${file} is accessible by others and chmod failed: ${error.code}`)
+  }
+}
+
 /**
  * HMAC key shared by every session and every OpenCode restart, so a secret keeps its
  * placeholder across them. Created on first use with owner-only permissions.
@@ -45,5 +55,6 @@ export function loadKey(file = defaultKeyFile(), fs = nodeFs) {
     key = fs.readFileSync(file)
   }
   if (key.length !== KEY_BYTES) throw new Error(`key file ${file} must hold ${KEY_BYTES} bytes, found ${key.length}`)
+  ensureOwnerOnly(file, fs)
   return key
 }
