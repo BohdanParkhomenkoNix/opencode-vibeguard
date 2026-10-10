@@ -1,144 +1,89 @@
 import { loadConfig } from "./config.js"
+import { findLeak } from "./guard.js"
+import { loadKey } from "./key.js"
+import { redactStrings, restoreStrings } from "./messages.js"
 import { buildPatternSet } from "./patterns.js"
-import { PlaceholderSession } from "./session.js"
-import { redactText } from "./engine.js"
-import { redactDeep, restoreDeep } from "./deep.js"
 import { restoreText } from "./restore.js"
+import { PlaceholderSession } from "./session.js"
 
-/**
- * OpenCode 插件入口：
- * - `experimental.chat.messages.transform`：LLM 请求前对全部消息做脱敏（保证 provider 永远看不到真实值）
- * - `tool.execute.before`：工具执行前还原占位符（保证本机执行拿到真实值）
- *
- * 说明：为了降低误用风险，本插件在“找不到配置文件或 enabled=false”时为 no-op。
- */
-export const VibeGuardPrivacy = async (ctx) => {
-  const config = await loadConfig(ctx.directory)
-  const debug = Boolean(process.env.OPENCODE_VIBEGUARD_DEBUG) || Boolean(config.debug)
+const LOG = "[vibeguard]"
 
-  if (debug) {
-    const from = config.loadedFrom ? config.loadedFrom : "未找到（插件将 no-op）"
-    console.log(`[opencode-vibeguard] 配置：${from} enabled=${config.enabled}`)
-  }
+/** Session hooks that see an LLM request before it is sent: system and messages are redacted here. */
+export const REQUEST_HOOKS = ["context", "title", "compaction", "generate"]
 
-  if (!config.enabled) return {}
+/** A secret never belongs in a query to a third-party search service. */
+export const NO_RESTORE_TOOLS = new Set(["websearch"])
 
-  const patterns = buildPatternSet(config.patterns)
-  const sessions = new Map()
+async function bodyText(request) {
+  if (!request) return ""
+  if (typeof request.clone === "function") return request.clone().text()
+  return typeof request.body === "string" ? request.body : ""
+}
 
-  const getSession = (sessionID) => {
-    const key = String(sessionID ?? "")
-    if (!key) return null
-    const existing = sessions.get(key)
-    if (existing) return existing
-    const created = new PlaceholderSession({
-      prefix: config.prefix,
-      ttlMs: config.ttlMs,
-      maxMappings: config.maxMappings,
-    })
-    sessions.set(key, created)
-    return created
-  }
-
-  return {
-    "experimental.chat.messages.transform": async (_input, output) => {
-      const msgs = output?.messages
-      if (!Array.isArray(msgs) || msgs.length === 0) return
-
-      const sessionID = msgs[0]?.info?.sessionID ?? msgs[0]?.parts?.[0]?.sessionID
-      const session = getSession(sessionID)
-      if (!session) return
-
-      session.cleanup()
-
-      let changedTextParts = 0
-
-      for (const msg of msgs) {
-        const parts = Array.isArray(msg?.parts) ? msg.parts : []
-        for (const part of parts) {
-          if (!part) continue
-
-          // 普通文本（用户/助手）
-          if (part.type === "text") {
-            if (part.ignored) continue
-            if (!part.text || typeof part.text !== "string") continue
-            const before = part.text
-            const after = redactText(before, patterns, session).text
-            if (after !== before) changedTextParts++
-            part.text = after
-            continue
-          }
-
-          // 推理文本（部分模型/配置会进入 prompt）
-          if (part.type === "reasoning") {
-            if (!part.text || typeof part.text !== "string") continue
-            const before = part.text
-            const after = redactText(before, patterns, session).text
-            if (after !== before) changedTextParts++
-            part.text = after
-            continue
-          }
-
-          // 工具调用/输出：最常见的泄漏来源（例如读取 .env）
-          if (part.type === "tool") {
-            const state = part.state
-            if (!state || typeof state !== "object") continue
-
-            // 统一把工具输入也做深度脱敏：真实执行的 args 会包含明文（由 tool.execute.before 还原），
-            // 如果不在这里再脱敏一次，后续回合会把明文 args 带给 LLM。
-            if (state.input && typeof state.input === "object") {
-              redactDeep(state.input, patterns, session)
-            }
-
-            if (state.status === "completed" && typeof state.output === "string") {
-              const before = state.output
-              const after = redactText(before, patterns, session).text
-              if (after !== before) changedTextParts++
-              state.output = after
-              continue
-            }
-            if (state.status === "error" && typeof state.error === "string") {
-              const before = state.error
-              const after = redactText(before, patterns, session).text
-              if (after !== before) changedTextParts++
-              state.error = after
-              continue
-            }
-            if (state.status === "pending" && typeof state.raw === "string") {
-              const before = state.raw
-              const after = redactText(before, patterns, session).text
-              if (after !== before) changedTextParts++
-              state.raw = after
-              continue
-            }
-          }
-        }
-      }
-
-      if (debug && changedTextParts > 0) {
-        console.log(`[opencode-vibeguard] 本次请求前脱敏：已修改 ${changedTextParts} 处文本片段`)
-      }
-    },
-
-    "experimental.text.complete": async (input, output) => {
-      if (!output || typeof output !== "object") return
-      if (typeof output.text !== "string" || !output.text) return
-      const session = getSession(input?.sessionID)
-      if (!session) return
-      session.cleanup()
-      const before = output.text
-      const after = restoreText(before, session)
-      output.text = after
-      if (debug && after !== before) {
-        console.log("[opencode-vibeguard] 本次响应完成后还原：已修改 1 处文本片段")
-      }
-    },
-
-    "tool.execute.before": async (input, output) => {
-      const session = getSession(input?.sessionID)
-      if (!session) return
-      session.cleanup()
-      restoreDeep(output?.args, session)
-    },
+/** If OpenCode ever sends a request whose hook failed, it goes out empty. */
+function block(event) {
+  for (const key of ["system", "messages"]) {
+    if (Array.isArray(event?.[key])) event[key].length = 0
   }
 }
+
+async function setup(ctx) {
+  let state
+  try {
+    const config = await loadConfig(ctx?.location?.directory)
+    if (!config.enabled) {
+      if (config.debug) console.error(`${LOG} disabled (${config.loadedFrom || "no config"})`)
+      return
+    }
+    state = {
+      config,
+      patterns: buildPatternSet(config.patterns),
+      session: new PlaceholderSession({
+        prefix: config.prefix, ttlMs: config.ttlMs, maxMappings: config.maxMappings, secret: loadKey(config.keyFile),
+      }),
+    }
+  } catch (error) {
+    // Fail closed: a guard that cannot start must not let requests through unguarded.
+    state = { error }
+    console.error(`${LOG} setup failed, every request is blocked: ${error.message}`)
+  }
+
+  const ready = () => {
+    if (state.error) throw new Error(`vibeguard: ${state.error.message}`)
+  }
+  const debug = (line) => {
+    if (state.config?.debug) console.error(`${LOG} ${line}`)
+  }
+
+  for (const name of REQUEST_HOOKS) {
+    await ctx.session.hook(name, async (event) => {
+      try {
+        ready()
+        state.session.cleanup()
+        const replaced = redactStrings(event.system, state.patterns, state.session) + redactStrings(event.messages, state.patterns, state.session)
+        debug(`kind=${name} replaced=${replaced}`)
+      } catch (error) {
+        block(event)
+        console.error(`${LOG} ${name} request blocked: ${error.message}`)
+        throw error
+      }
+    })
+  }
+
+  await ctx.session.hook("http.request", async (event) => {
+    ready()
+    const leak = findLeak(await bodyText(event.request), state.patterns, state.session)
+    debug(`kind=${event.kind} guard=${leak ? "BLOCKED" : "clean"}`)
+    if (leak) throw new Error(`vibeguard: plaintext ${leak.category} in outgoing ${event.kind} request`)
+  })
+
+  await ctx.tool.hook("execute.before", async (event) => {
+    ready()
+    if (NO_RESTORE_TOOLS.has(event.tool)) return
+    if (typeof event.input === "string") event.input = restoreText(event.input, state.session)
+    else restoreStrings(event.input, state.session)
+  })
+}
+
+export { setup }
+export default { id: "vibeguard", setup }
