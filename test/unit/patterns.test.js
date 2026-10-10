@@ -64,3 +64,9 @@ test("wrong shapes are errors and never echo keyword values", () => {
   assert.match(error.message, /patterns\.keywords\[0\] needs a non-empty string "value"/)
   assert.doesNotMatch(error.message, /42/)
 })
+
+test("a broken regex error never echoes the pattern text", () => {
+  const error = (() => { try { buildPatternSet({ regex: [{ pattern: "hunter2-secret(", category: "mine" }] }) } catch (e) { return e } })()
+  assert.match(error.message, /patterns\.regex\[0\] \(MINE\) is not a valid regex/)
+  assert.doesNotMatch(error.message, /hunter2/)
+})

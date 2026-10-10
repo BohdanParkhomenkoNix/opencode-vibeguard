@@ -136,8 +136,8 @@ export function buildPatternSet(patterns) {
     const peeled = peelInlineFlags(x.pattern.trim(), typeof x.flags === "string" ? x.flags : "")
     try {
       new RegExp(peeled.pattern, peeled.flags.includes("g") ? peeled.flags : `${peeled.flags}g`)
-    } catch (error) {
-      fail(`patterns.regex[${i}] (${category}) is not a valid regex: ${error.message}`)
+    } catch {
+      fail(`patterns.regex[${i}] (${category}) is not a valid regex`)
     }
     return { pattern: peeled.pattern, flags: peeled.flags, category }
   })
