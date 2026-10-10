@@ -88,52 +88,66 @@ const BUILTIN = new Map([
       category: "MAC",
     },
   ],
+  ["openai_key", { pattern: String.raw`(?<![A-Za-z0-9_-])sk-(?!ant-)(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}`, flags: "", category: "OPENAI_KEY" }],
+  ["anthropic_key", { pattern: String.raw`(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{20,}`, flags: "", category: "ANTHROPIC_KEY" }],
+  ["github_token", { pattern: String.raw`(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})`, flags: "", category: "GITHUB_TOKEN" }],
+  ["aws_access_key", { pattern: String.raw`\b(?:AKIA|ASIA)[0-9A-Z]{16}\b`, flags: "", category: "AWS_ACCESS_KEY" }],
+  ["google_api_key", { pattern: String.raw`(?<![A-Za-z0-9_-])AIza[0-9A-Za-z_-]{35}`, flags: "", category: "GOOGLE_API_KEY" }],
+  ["private_key", { pattern: String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`, flags: "", category: "PRIVATE_KEY" }],
+  ["jwt", { pattern: String.raw`(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}`, flags: "", category: "JWT" }],
 ])
 
-export function buildPatternSet(patterns) {
-  const raw = patterns && typeof patterns === "object" ? patterns : {}
+export const BUILTIN_NAMES = [...BUILTIN.keys()]
 
-  const keywords = Array.isArray(raw.keywords) ? raw.keywords : []
-  const regex = Array.isArray(raw.regex) ? raw.regex : []
-  const builtin = Array.isArray(raw.builtin) ? raw.builtin : []
-  const exclude = Array.isArray(raw.exclude) ? raw.exclude : []
-
-  const keywordRules = keywords
-    .map((x) => {
-      if (!x || typeof x !== "object") return null
-      const value = String(x.value ?? "").trim()
-      if (!value) return null
-      const category = sanitizeCategory(x.category)
-      return { value, category }
-    })
-    .filter(Boolean)
-
-  const regexRules = []
-
-  for (const x of regex) {
-    if (!x || typeof x !== "object") continue
-    const pattern = String(x.pattern ?? "").trim()
-    if (!pattern) continue
-    const category = sanitizeCategory(x.category)
-    const flags = typeof x.flags === "string" ? x.flags : ""
-    const peeled = peelInlineFlags(pattern, flags)
-    regexRules.push({ pattern: peeled.pattern, flags: peeled.flags, category })
-  }
-
-  for (const name of builtin) {
-    const key = String(name ?? "").trim()
-    if (!key) continue
-    const rule = BUILTIN.get(key)
-    if (!rule) continue
-    regexRules.push({ pattern: rule.pattern, flags: rule.flags, category: rule.category })
-  }
-
-  const excludeSet = new Set(exclude.map((x) => String(x ?? "")))
-
-  return {
-    keywords: keywordRules,
-    regex: regexRules,
-    exclude: excludeSet,
-  }
+function fail(message) {
+  throw new Error(message)
 }
 
+function listOf(raw, key) {
+  const value = raw[key]
+  if (value === undefined) return []
+  if (!Array.isArray(value)) fail(`patterns.${key} must be an array`)
+  return value
+}
+
+/**
+ * Strict on purpose: a rule that silently drops out stops hiding its secret, so any
+ * malformed rule is an error the caller turns into a blocked request.
+ * Messages name positions and categories, never keyword values.
+ */
+export function buildPatternSet(patterns) {
+  if (patterns !== undefined && (patterns === null || typeof patterns !== "object" || Array.isArray(patterns))) {
+    fail("patterns must be an object")
+  }
+  const raw = patterns ?? {}
+
+  const keywords = listOf(raw, "keywords").map((x, i) => {
+    if (!x || typeof x !== "object" || typeof x.value !== "string" || !x.value.trim()) {
+      fail(`patterns.keywords[${i}] needs a non-empty string "value"`)
+    }
+    return { value: x.value.trim(), category: sanitizeCategory(x.category) }
+  })
+
+  const regex = listOf(raw, "regex").map((x, i) => {
+    if (!x || typeof x !== "object" || typeof x.pattern !== "string" || !x.pattern.trim()) {
+      fail(`patterns.regex[${i}] needs a non-empty string "pattern"`)
+    }
+    const category = sanitizeCategory(x.category)
+    const peeled = peelInlineFlags(x.pattern.trim(), typeof x.flags === "string" ? x.flags : "")
+    try {
+      new RegExp(peeled.pattern, peeled.flags.includes("g") ? peeled.flags : `${peeled.flags}g`)
+    } catch (error) {
+      fail(`patterns.regex[${i}] (${category}) is not a valid regex: ${error.message}`)
+    }
+    return { pattern: peeled.pattern, flags: peeled.flags, category }
+  })
+
+  for (const name of listOf(raw, "builtin")) {
+    const rule = BUILTIN.get(String(name).trim())
+    if (!rule) fail(`unknown builtin rule "${name}"; known: ${BUILTIN_NAMES.join(", ")}`)
+    regex.push({ pattern: rule.pattern, flags: rule.flags, category: rule.category })
+  }
+
+  const exclude = new Set(listOf(raw, "exclude").map((x) => String(x ?? "")))
+  return { keywords, regex, exclude }
+}
