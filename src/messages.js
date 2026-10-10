@@ -1,4 +1,5 @@
 import { redactText } from "./engine.js"
+import { escapedForms, escapedViews } from "./escapes.js"
 import { restoreText } from "./restore.js"
 import { getPlaceholderRegex } from "./session.js"
 
@@ -69,22 +70,37 @@ function mapGaps(text, placeholders, fn) {
   return out + fn(text.slice(last))
 }
 
+/**
+ * Rules run on the text and, to learn values only, on its views with JSON escapes undone:
+ * `password = \"…\"` in a notebook read with `read` only matches once `\"` is undone. The
+ * known-value pass then replaces the value in whatever escaped form it takes in the text.
+ */
 function rulePass(root, patterns, session) {
   const placeholders = getPlaceholderRegex(session.prefix)
-  return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => redactText(gap, patterns, session).text), SKIP_KEYS)
+  return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => {
+    for (const view of escapedViews(gap)) redactText(view, patterns, session)
+    return redactText(gap, patterns, session).text
+  }), SKIP_KEYS)
 }
 
 /**
- * Replaces every value the session already knows with its existing placeholder, longest first.
- * A context rule (a lookbehind) learns a value from one occurrence, but the same value turns up
- * bare in tool output, and the guard blocks any known value it finds.
+ * Replaces every value the session already knows, and every escaped form of it, with its
+ * existing placeholder, longest first. A context rule (a lookbehind) learns a value from one
+ * occurrence, but the same value turns up bare or escaped in tool output, and the guard blocks
+ * any known value it finds.
  */
 function knownPass(root, session) {
-  const originals = [...session.knownEntries()].map(([original]) => original).filter(Boolean).sort((a, b) => b.length - a.length)
-  if (originals.length === 0) return 0
-  const known = new RegExp(originals.map((o) => o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g")
+  const originalOf = new Map()
+  for (const [original] of session.knownEntries()) {
+    if (!original) continue
+    originalOf.set(original, original)
+    for (const form of escapedForms(original)) if (!originalOf.has(form)) originalOf.set(form, original)
+  }
+  if (originalOf.size === 0) return 0
+  const needles = [...originalOf.keys()].sort((a, b) => b.length - a.length)
+  const known = new RegExp(needles.map((o) => o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g")
   const placeholders = getPlaceholderRegex(session.prefix)
-  return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => gap.replace(known, (original) => session.lookupReverse(original))), SKIP_KEYS)
+  return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => gap.replace(known, (found) => session.lookupReverse(originalOf.get(found)))), SKIP_KEYS)
 }
 
 /** Redacts one tree: rules first, then the values they learned. Returns the number of strings changed. */

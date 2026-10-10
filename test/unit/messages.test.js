@@ -182,3 +182,48 @@ test("restore ignores SKIP_KEYS", () => {
   assert.equal(part.name, SECRET)
   assert.equal(part.input.command, SECRET)
 })
+
+const escapedRules = buildPatternSet({
+  regex: [
+    { pattern: String.raw`(?<=password["']?\s*[:=]\s*["']?)[A-Za-z0-9]{12,}`, category: "secret_value" },
+    { pattern: String.raw`(?<=\b[A-Z][A-Z0-9_]*_PASSWORD=)[^\s"'` + "`" + String.raw`]{8,}`, category: "env_secret" },
+    { pattern: String.raw`(?<=secret_key["']?\s*[:=]\s*["']?)[A-Za-z0-9/+=]{16,}`, category: "aws_secret" },
+  ],
+})
+
+function maskedResult(text) {
+  const s = session()
+  const messages = [{ role: "assistant", content: [toolResult(text)] }]
+  redactRequest([[], messages], escapedRules, s)
+  return { text: messages[0].content[0].result.value[0].text, body: JSON.stringify({ messages }), s }
+}
+
+const CASES = {
+  "notebook read with line numbers": ["Fake7pass9word12", (v) => `Read file /tmp/nb.ipynb, lines 1-3\n1: {\n2:   "cells": [{"source": ["password = \\"${v}\\"\\n"]}]\n3: }`],
+  "JSON inside JSON": ["Fake8pass1word34", (v) => JSON.stringify({ config: JSON.stringify({ password: v }) })],
+  "env inside a JSON string": ["Envpass99xyz", (v) => JSON.stringify({ env: `A=1\nDB_PASSWORD=${v}\nB=2` })],
+  "value with an escaped slash": ["Ab12/Cd34+Ef56/Gh78", (v) => `{"secret_key":"${v.replaceAll("/", "\\/")}"}`],
+}
+
+for (const [name, [value, make]] of Object.entries(CASES)) {
+  test(`escaped secret is masked: ${name}`, () => {
+    const { text, body, s } = maskedResult(make(value))
+    assert.ok(!text.includes(value) && !text.includes(value.replaceAll("/", "\\/")), "value left in the tool result")
+    assert.match(text, /__VG_[A-Z_]+_[0-9a-f]{12}__/)
+    assert.equal(findLeak(body, escapedRules, s), null)
+  })
+}
+
+test("text with backslashes but no secret is unchanged", () => {
+  const original = String.raw`C:\new\tools\run.exe "a\"b" \u00e9`
+  assert.equal(maskedResult(original).text, original)
+})
+
+test("a second pass over masked escaped text changes nothing", () => {
+  const s = session()
+  const messages = [{ role: "assistant", content: [toolResult(CASES["JSON inside JSON"][1]("Fake8pass1word34"))] }]
+  redactRequest([[], messages], escapedRules, s)
+  const once = JSON.stringify(messages)
+  assert.equal(redactRequest([[], messages], escapedRules, s), 0)
+  assert.equal(JSON.stringify(messages), once)
+})

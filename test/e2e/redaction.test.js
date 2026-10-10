@@ -63,3 +63,33 @@ test("a broken config sends nothing to the provider", async (t) => {
   assert.notEqual(run.code, 0)
   assert.match(run.stderr, /\[vibeguard\] setup failed/)
 })
+
+const NB_PASSWORD = "Nb7pass2Xq9Lm4Rt"
+
+test("a password inside a notebook read with the read tool never reaches the provider", async (t) => {
+  let notebookPath = ""
+  const readNotebook = (body) => {
+    if (!toolNames(body).includes("read")) return { text: "Vibeguard e2e" }
+    if (body.messages.at(-1).role === "tool") return { text: "done" }
+    const tool = body.tools.find((x) => (x?.function?.name ?? x?.name) === "read")
+    const required = tool?.function?.parameters?.required ?? tool?.parameters?.required ?? []
+    return { tool: { name: "read", args: Object.fromEntries(required.map((key) => [key, notebookPath])) } }
+  }
+  const mock = await startMockProvider(readNotebook)
+  t.after(() => mock.close())
+  const base = makeProject(t, { baseURL: mock.baseURL, plugin: false })
+  const notebook = JSON.stringify({ cells: [{ cell_type: "code", source: [`password = "${NB_PASSWORD}"\n`] }] }, null, 1)
+  const project = makeProject(t, {
+    baseURL: mock.baseURL,
+    vibeguard: vibeguard(base.home, {
+      patterns: { regex: [{ pattern: String.raw`(?<=password["']?\s*[:=]\s*["']?)[A-Za-z0-9]{12,}`, category: "secret_value" }] },
+    }),
+    files: { "nb.ipynb": notebook },
+  })
+  notebookPath = path.join(project.dir, "nb.ipynb")
+  const run = await runOpencode(project, "Read nb.ipynb.")
+  assert.equal(run.code, 0, run.stderr.slice(-3000))
+  assert.ok(mock.requests.length >= 2, `requests: ${mock.requests.length}`)
+  for (const [i, r] of mock.requests.entries()) assert.ok(!r.raw.includes(NB_PASSWORD), `request ${i} leaks the notebook password`)
+  assert.match(mock.requests.at(-1).raw, /__VG_SECRET_VALUE_[0-9a-f]{12}__/)
+})
