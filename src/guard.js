@@ -2,6 +2,29 @@ import { redactText } from "./engine.js"
 import { mapStrings } from "./messages.js"
 import { getPlaceholderRegex } from "./session.js"
 
+const MAX_JSON_DEPTH = 3
+
+function parseNested(text) {
+  const head = text.trimStart()[0]
+  if (head !== "{" && head !== "[") return undefined
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
+function collect(value, out, depth) {
+  mapStrings(value, (text) => {
+    out.push(text)
+    if (depth < MAX_JSON_DEPTH) {
+      const nested = parseNested(text)
+      if (nested !== undefined) collect(nested, out, depth + 1)
+    }
+    return text
+  })
+}
+
 function stringsOf(bodyText) {
   let parsed
   try {
@@ -12,11 +35,9 @@ function stringsOf(bodyText) {
   if (typeof parsed === "string") return [parsed]
   const out = []
   // Decoded strings, not the raw body: a secret with a quote or a newline is escaped in JSON
-  // and would slip past a substring search of the wire text.
-  mapStrings(parsed, (text) => {
-    out.push(text)
-    return text
-  })
+  // and would slip past a substring search of the wire text. Strings that are JSON themselves
+  // (tool_calls[].function.arguments) are decoded again for the same reason.
+  collect(parsed, out, 0)
   return out
 }
 

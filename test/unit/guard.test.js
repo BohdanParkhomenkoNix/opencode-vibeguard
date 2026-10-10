@@ -44,3 +44,37 @@ test("a non-JSON body is scanned as text", () => {
   assert.deepEqual(findLeak("raw alice@corp.io", patterns, session()), { category: "EMAIL" })
   assert.equal(findLeak("", patterns, session()), null)
 })
+
+const toolCallBody = (args) =>
+  JSON.stringify({ model: "m", messages: [{ role: "assistant", tool_calls: [{ id: "c1", type: "function", function: { name: "shell", arguments: args } }] }] })
+const nest = (value, levels) => {
+  let v = value
+  for (let i = 0; i < levels; i++) v = JSON.stringify({ v })
+  return v
+}
+
+test("a known value escaped inside tool-call arguments is caught", () => {
+  const s = session()
+  const original = 'pa"ss\\word-42'
+  s.getOrCreatePlaceholder(original, "test")
+  assert.deepEqual(findLeak(toolCallBody(JSON.stringify({ command: `echo ${original}` })), patterns, s), { category: "TEST" })
+})
+
+test("placeholders inside nested JSON pass", () => {
+  const s = session()
+  const ph = s.getOrCreatePlaceholder("alice@corp.io", "email")
+  assert.equal(findLeak(toolCallBody(JSON.stringify({ command: `mail ${ph}` })), patterns, s), null)
+})
+
+test("text that only looks like JSON is scanned as text", () => {
+  assert.equal(findLeak(body("{not json"), patterns, session()), null)
+  assert.deepEqual(findLeak(body("[oops alice@corp.io"), patterns, session()), { category: "EMAIL" })
+})
+
+test("nesting deeper than 3 levels is not decoded", () => {
+  const s = session()
+  const original = 'q"uote-secret-1'
+  s.getOrCreatePlaceholder(original, "test")
+  assert.deepEqual(findLeak(body(nest(original, 3)), patterns, s), { category: "TEST" })
+  assert.equal(findLeak(body(nest(original, 4)), patterns, s), null)
+})
