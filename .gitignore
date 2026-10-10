@@ -10,5 +10,5 @@ vibeguard.config.json
 .opencode/
 
 # 测试与本地临时文件（按需保留在本地，不提交）
-test/
 coverage/
+.superpowers/
