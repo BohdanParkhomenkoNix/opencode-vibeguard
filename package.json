@@ -5,7 +5,7 @@
   "type": "module",
   "main": "./src/index.js",
   "exports": "./src/index.js",
-  "files": ["src", "README.md", "vibeguard.config.json.example"],
+  "files": ["index.js", "src", "README.md", "vibeguard.config.json.example"],
   "scripts": {
     "test": "node --test test/unit/",
     "test:e2e": "node --test --test-concurrency=1 --test-timeout=300000 test/e2e/"
