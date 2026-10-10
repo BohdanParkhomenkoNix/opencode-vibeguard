@@ -75,3 +75,35 @@ test("cycles and binary values are survived", () => {
   assert.equal(mapStrings(node, (x) => x.toUpperCase()), 1)
   assert.equal(node.text, SECRET.toUpperCase())
 })
+
+test("skip keys do not protect fields inside tool input and result payloads", () => {
+  const s = session()
+  const parts = [
+    toolCall({ name: SECRET, id: SECRET, command: "x" }),
+    { type: "tool-result", id: "c1", name: "shell", result: { type: "content", value: [{ type: "text", text: "ok" }, { name: SECRET }] } },
+  ]
+  redactStrings(parts, patterns, s)
+  assert.ok(!JSON.stringify(parts).includes(SECRET))
+  assert.equal(parts[0].id, "c1")
+  assert.equal(parts[0].name, "shell")
+})
+
+test("strings directly inside arrays are processed", () => {
+  const s = session()
+  const root = { content: [`a ${SECRET}`, "plain"] }
+  assert.equal(redactStrings(root, patterns, s), 1)
+  assert.ok(!root.content[0].includes(SECRET))
+  assert.equal(root.content[1], "plain")
+})
+
+test("restore ignores SKIP_KEYS", () => {
+  const s = session()
+  const holder = [{ text: SECRET }]
+  redactStrings(holder, patterns, s)
+  const placeholder = holder[0].text
+  const part = { type: "tool-call", id: placeholder, name: placeholder, input: { command: placeholder } }
+  restoreStrings(part, s)
+  assert.equal(part.id, SECRET)
+  assert.equal(part.name, SECRET)
+  assert.equal(part.input.command, SECRET)
+})
