@@ -37,6 +37,7 @@ test("package version is 0.2.3", () => {
 test("README limits: escaped secrets are masked; domain exclude is address-shaped only", () => {
   const readme = read("README.md")
   assert.match(readme, /escaped text[^\n]*masked[^\n]*3 levels/)
+  assert.match(readme, /base64[^\n]*not detected/)
   assert.doesNotMatch(readme, /JSON-encoded text[^\n]*is not masked/)
   assert.match(readme, /address- or host-shaped[^\n]*user:pass@localhost[^\n]*masked/)
 })

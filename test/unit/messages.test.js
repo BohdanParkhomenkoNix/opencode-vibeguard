@@ -191,10 +191,10 @@ const escapedRules = buildPatternSet({
   ],
 })
 
-function maskedResult(text) {
+function maskedResult(text, rules = escapedRules) {
   const s = session()
   const messages = [{ role: "assistant", content: [toolResult(text)] }]
-  redactRequest([[], messages], escapedRules, s)
+  redactRequest([[], messages], rules, s)
   return { text: messages[0].content[0].result.value[0].text, body: JSON.stringify({ messages }), s }
 }
 
@@ -226,4 +226,20 @@ test("a second pass over masked escaped text changes nothing", () => {
   const once = JSON.stringify(messages)
   assert.equal(redactRequest([[], messages], escapedRules, s), 0)
   assert.equal(JSON.stringify(messages), once)
+})
+
+const noBackslashRules = buildPatternSet({
+  regex: [{ pattern: String.raw`(?<=password["']?\s*[:=]\s*["']?)[^\s"'\\]{8,}`, category: "secret_value" }],
+})
+
+test("a value written with \\uXXXX escapes is masked", () => {
+  const { text, body, s } = maskedResult(String.raw`{"password": "p\u00e4ssw\u00f6rd99x"}`, noBackslashRules)
+  assert.ok(!text.includes(String.raw`p\u00e4ssw\u00f6rd99x`) && !text.includes("pässwörd99x"), "value left in the tool result")
+  assert.match(text, /__VG_[A-Z_]+_[0-9a-f]{12}__/)
+  assert.equal(findLeak(body, noBackslashRules, s), null)
+})
+
+test("a spelling the masker cannot rewrite is blocked by the guard", () => {
+  const { body, s } = maskedResult(String.raw`{"password": "p\u00E4ssw\u00F6rd99x"}`, noBackslashRules)
+  assert.deepEqual(findLeak(body, noBackslashRules, s), { category: "SECRET_VALUE" })
 })

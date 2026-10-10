@@ -28,7 +28,7 @@ export function escapedViews(text) {
 
 const jsonEscape = (s) => JSON.stringify(s).slice(1, -1)
 const slashEscape = (s) => s.replaceAll("/", "\\/")
-const asciiEscape = (s) => s.replace(/[\u0080-￿]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
+const asciiEscape = (s) => s.replace(/[\u0080-\uFFFF]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
 
 /**
  * How a value can be spelled inside escaped text: JSON-escaped once to three times, each level
