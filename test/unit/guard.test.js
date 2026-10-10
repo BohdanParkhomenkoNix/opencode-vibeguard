@@ -71,12 +71,12 @@ test("text that only looks like JSON is scanned as text", () => {
   assert.deepEqual(findLeak(body("[oops alice@corp.io"), patterns, session()), { category: "EMAIL" })
 })
 
-test("nesting deeper than 3 levels is not decoded", () => {
+test("nesting deeper than 3 JSON levels plus 3 escape levels is not decoded", () => {
   const s = session()
   const original = 'q"uote-secret-1'
   s.getOrCreatePlaceholder(original, "test")
-  assert.deepEqual(findLeak(body(nest(original, 3)), patterns, s), { category: "TEST" })
-  assert.equal(findLeak(body(nest(original, 4)), patterns, s), null)
+  assert.deepEqual(findLeak(body(nest(original, 6)), patterns, s), { category: "TEST" })
+  assert.equal(findLeak(body(nest(original, 7)), patterns, s), null)
 })
 
 test("the guard honours exclude by domain", () => {
