@@ -31,6 +31,12 @@ Built-in rules: `openai_key`, `anthropic_key`, `github_token`, `aws_access_key`,
 
 Placeholders are `HMAC-SHA256(key, value)` truncated to 12 hex chars. The key lives in `~/.config/opencode/vibeguard.key` (32 bytes, mode 0600, created on first run; override with `key_file`), so a secret keeps its placeholder across sessions and restarts.
 
+If the key file is readable by others, the plugin tightens it to 0600; if it cannot, every request is blocked.
+
+`patterns.exclude` entries match exactly or by domain: `example.com` also covers `a@example.com` and `a@mail.example.com`, but not `a@notexample.com`. Comparison ignores case. This applies to every rule, keywords included. For example, with `exclude: ["example.com"]` the keyword `boss@example.com` is not masked.
+
+`session.ttl` sets how long a mapping lives (default `24h`); `"0s"` means mappings never expire by age (`session.max_mappings` still applies).
+
 Set `"debug": true` to log one line per request: `kind=<kind> replaced=<n>` and `guard=clean|BLOCKED`. Secrets are never logged.
 
 ## Limits
