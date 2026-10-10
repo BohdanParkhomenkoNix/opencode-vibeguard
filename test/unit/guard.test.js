@@ -91,3 +91,16 @@ test("deeply nested JSON inside a string does not crash the guard", () => {
   assert.deepEqual(findLeak(body(`${deep} alice@corp.io`), patterns, session()), { category: "EMAIL" })
   assert.deepEqual(findLeak(JSON.stringify({ model: "m", messages: [{ role: "user", content: deep }, { role: "user", content: "alice@corp.io" }] }), patterns, session()), { category: "EMAIL" })
 })
+
+const secretValue = buildPatternSet({ regex: [{ pattern: String.raw`(?<=password["']?\s*[:=]\s*["']?)[A-Za-z0-9]{12,}`, category: "secret_value" }] })
+const readOutput = (value) => `Read file /tmp/nb.ipynb, lines 1-3\n1: {\n2:   "cells": [{"source": ["password = \\"${value}\\"\\n"]}]\n3: }`
+
+test("a rule match visible only after unescaping is caught", () => {
+  assert.deepEqual(findLeak(body(readOutput("Fake7pass9word12")), secretValue, session()), { category: "SECRET_VALUE" })
+})
+
+test("a known value written escaped inside non-JSON text is caught", () => {
+  const s = session()
+  s.getOrCreatePlaceholder('pa"ss-word-42', "test")
+  assert.deepEqual(findLeak(body('1: {"cmd": "echo pa\\"ss-word-42"}  trailing'), patterns, s), { category: "TEST" })
+})
