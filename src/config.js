@@ -73,10 +73,15 @@ export function getConfigCandidates(directory) {
   return env ? [path.resolve(dir, expandHome(env)), ...candidates] : candidates
 }
 
-/** First existing candidate wins. None at all: disabled, a deliberate off switch. */
+/** First existing candidate wins. None at all: disabled, a deliberate off switch. An env path that does not exist is an error. */
 export async function loadConfig(directory) {
-  for (const file of getConfigCandidates(directory)) {
-    if (!existsSync(file)) continue
+  const explicit = process.env.OPENCODE_VIBEGUARD_CONFIG
+  for (const [i, file] of getConfigCandidates(directory).entries()) {
+    if (!existsSync(file)) {
+      // A named file that is missing is a typo, not the deliberate "no config" off switch.
+      if (explicit && i === 0) fail(file, "not found")
+      continue
+    }
     return { ...normalizeConfig(await readJson(file), file), loadedFrom: file }
   }
   return {

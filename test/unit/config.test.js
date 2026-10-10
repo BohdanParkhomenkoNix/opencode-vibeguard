@@ -45,6 +45,17 @@ test("env path wins over everything", async (t) => {
   assert.equal((await loadConfig(project)).loadedFrom, env)
 })
 
+test("an env path to a missing file is an error that names the path only", async (t) => {
+  const { project, write, global } = setup(t)
+  write(global, { enabled: true })
+  const missing = path.join(project, "typo.json")
+  process.env.OPENCODE_VIBEGUARD_CONFIG = missing
+  await assert.rejects(loadConfig(project), (error) => {
+    assert.equal(error.message, `config ${missing}: not found`)
+    return true
+  })
+})
+
 test("defaults: 24h ttl, default key, __VG_ prefix", async (t) => {
   const { home, project, write, global } = setup(t)
   write(global, { enabled: true })

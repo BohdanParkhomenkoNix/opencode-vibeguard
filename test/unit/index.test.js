@@ -100,3 +100,20 @@ test("broken JSON config also blocks, without echoing the file", async (t) => {
   const hooks = await start(t, `{ "patterns": { "keywords": [{ "value": "${SECRET}" `)
   await assert.rejects(hooks.session.context(event("x")), (error) => !error.message.includes(SECRET))
 })
+
+test("the guard blocks when the event carries no readable request", async (t) => {
+  const hooks = await start(t, ON)
+  for (const bad of [{ kind: "primary" }, { kind: "primary", request: {} }, { kind: "primary", request: { body: new Uint8Array(2) } }]) {
+    await assert.rejects(hooks.session["http.request"](bad), (error) => {
+      assert.match(error.message, /vibeguard: .*request body/)
+      return true
+    })
+  }
+})
+
+test("the guard accepts an empty body read from a real Request, and a string body", async (t) => {
+  const hooks = await start(t, ON)
+  await hooks.session["http.request"]({ kind: "title", request: new Request("http://x", { method: "POST", body: "" }) })
+  await hooks.session["http.request"]({ kind: "title", request: { body: "{}" } })
+  await assert.rejects(hooks.session["http.request"]({ kind: "title", request: { body: `leak ${SECRET}` } }), /plaintext TEST/)
+})
