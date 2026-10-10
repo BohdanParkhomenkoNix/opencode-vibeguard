@@ -22,3 +22,20 @@ test("README documents the V2 install line", () => {
 test("CI runs the unit tests", () => {
   assert.match(read(".github/workflows/test.yml"), /npm test/)
 })
+
+test("README documents exclude by domain, ttl 0s and key permissions", () => {
+  const readme = read("README.md")
+  assert.match(readme, /`patterns\.exclude`[^\n]*domain/)
+  assert.match(readme, /`"0s"`[^\n]*never expire/)
+  assert.match(readme, /readable by others[^\n]*0600/)
+})
+
+test("package version is 0.2.2", () => {
+  assert.equal(JSON.parse(read("package.json")).version, "0.2.2")
+})
+
+test("README limits: JSON-encoded secrets are blocked, not masked; domain exclude is address-shaped only", () => {
+  const readme = read("README.md")
+  assert.match(readme, /JSON-encoded[^\n]*block/)
+  assert.match(readme, /address- or host-shaped[^\n]*user:pass@localhost[^\n]*masked/)
+})

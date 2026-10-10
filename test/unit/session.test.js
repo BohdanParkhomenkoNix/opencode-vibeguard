@@ -45,3 +45,10 @@ test("the oldest mapping is evicted at max_mappings", () => {
 test("placeholder regex finds suffixed placeholders", () => {
   assert.deepEqual("a __VG_X_0123456789ab__ b __VG_X_0123456789ab_2__".match(getPlaceholderRegex("__VG_")).length, 2)
 })
+
+test("ttl 0 keeps mappings forever", () => {
+  const s = make(KEY_A, { ttlMs: 0 })
+  const ph = s.getOrCreatePlaceholder("hunter2", "test")
+  s.cleanup(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
+  assert.equal(s.lookup(ph), "hunter2")
+})

@@ -14,10 +14,9 @@ function toHexLower(buffer) {
 }
 
 /**
- * 会话内占位符映射管理器：
- * - 生成占位符：__VG_<CATEGORY>_<hash12>__（与 VibeGuard 一致）
- * - hash12：HMAC-SHA256(会话随机 secret, 原文) 的 12 位十六进制小写截断
- * - 维护 placeholder <-> original 的双向映射，用于工具执行前还原
+ * Placeholder ↔ value map shared by every session of one OpenCode process.
+ * - placeholder: __VG_<CATEGORY>_<hash12>__, hash12 = first 12 hex chars of HMAC-SHA256(key, value)
+ * - ttlMs 0 (`session.ttl: "0s"`) means mappings never expire by age; maxMappings still applies
  */
 export class PlaceholderSession {
   /**

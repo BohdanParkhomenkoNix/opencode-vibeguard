@@ -41,6 +41,28 @@ function insertCovered(covered, span) {
   return merged
 }
 
+const EMAIL_LOCAL_PART = /^[a-z0-9._%+-]+$/
+// Hostname labels, optionally preceded by an email local part (`a@mail` of `a@mail.example.com`).
+const HOST_LABELS = /^(?:[a-z0-9._%+-]+@)?[a-z0-9-]+(?:\.[a-z0-9-]+)*$/
+
+/**
+ * An exact entry, or an address/host under that domain: `example.com` covers `a@example.com`,
+ * `a@mail.example.com` and `api.example.com`. A credential such as `user:pass@localhost` is not
+ * address-shaped, so the domain rule leaves it masked.
+ */
+function isExcluded(original, exclude) {
+  if (exclude.size === 0) return false
+  const value = original.toLowerCase()
+  for (const entry of exclude) {
+    const x = entry.toLowerCase()
+    if (!x) continue
+    if (value === x) return true
+    if (value.endsWith(`@${x}`) && EMAIL_LOCAL_PART.test(value.slice(0, -(x.length + 1)))) return true
+    if (value.endsWith(`.${x}`) && HOST_LABELS.test(value.slice(0, -(x.length + 1)))) return true
+  }
+  return false
+}
+
 /**
  * 对输入文本进行脱敏替换，返回替换后的文本与命中信息。
  * 设计与 VibeGuard 的 redact 引擎一致：处理重叠命中，确保不会把占位符切碎。
@@ -65,7 +87,7 @@ export function redactText(input, patterns, session) {
       const end = pos + needle.length
       const original = text.slice(start, end)
       idx = end
-      if (patterns.exclude.has(original)) continue
+      if (isExcluded(original, patterns.exclude)) continue
       found.push({ start, end, original, category: rule.category })
     }
   }
@@ -80,7 +102,7 @@ export function redactText(input, patterns, session) {
       if (start < 0) continue
       const end = start + m[0].length
       const original = text.slice(start, end)
-      if (patterns.exclude.has(original)) continue
+      if (isExcluded(original, patterns.exclude)) continue
       found.push({ start, end, original, category: rule.category })
     }
   }
