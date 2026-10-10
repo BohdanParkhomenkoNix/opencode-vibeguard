@@ -90,3 +90,32 @@ test("exclude does not cover lookalike domains", () => {
 test("exclude still matches an exact value", () => {
   assert.deepEqual(excluded("git@github.com:org/repo.git a@b.io", ["git@github.com"]), ["a@b.io"])
 })
+
+function maskedBy(text, patternsConfig) {
+  const found = []
+  redactText(text, buildPatternSet(patternsConfig), {
+    getOrCreatePlaceholder(original) { found.push(original); return "X" },
+  })
+  return found
+}
+const ENV_RULE = { pattern: "(?<=PASSWORD=)[^\\s\"'`]{8,}", category: "ENV_SECRET" }
+
+test("exclude by host does not unmask a credential ending in that host", () => {
+  const cfg = { builtin: [], regex: [ENV_RULE], exclude: ["localhost"] }
+  assert.deepEqual(maskedBy("DB_PASSWORD=admin:pw12345678@localhost", cfg), ["admin:pw12345678@localhost"])
+})
+
+test("exclude by domain does not unmask a secret that only ends in .domain", () => {
+  const cfg = { builtin: [], regex: [ENV_RULE], exclude: ["example.com"] }
+  assert.deepEqual(maskedBy("SMTP_PASSWORD=Hunter2:xyz.example.com", cfg), ["Hunter2:xyz.example.com"])
+})
+
+test("exclude still covers address- and host-shaped matches", () => {
+  const cfg = { builtin: [], regex: [{ pattern: "[a-z.@]+", category: "ADDR" }], exclude: ["example.com"] }
+  assert.deepEqual(maskedBy("user@example.com api.example.com", cfg), [])
+})
+
+test("exclude by domain applies to keywords", () => {
+  const cfg = { builtin: [], keywords: [{ value: "boss@example.com", category: "NAME" }], exclude: ["example.com"] }
+  assert.deepEqual(maskedBy("ping boss@example.com", cfg), [])
+})

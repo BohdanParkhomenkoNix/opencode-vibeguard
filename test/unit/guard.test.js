@@ -84,3 +84,10 @@ test("the guard honours exclude by domain", () => {
   assert.equal(findLeak(body("write to dev@Example.com"), byDomain, session()), null)
   assert.deepEqual(findLeak(body("write to dev@notexample.com"), byDomain, session()), { category: "EMAIL" })
 })
+
+test("deeply nested JSON inside a string does not crash the guard", () => {
+  const deep = "[".repeat(20000) + "]".repeat(20000)
+  assert.equal(findLeak(body(deep), patterns, session()), null)
+  assert.deepEqual(findLeak(body(`${deep} alice@corp.io`), patterns, session()), { category: "EMAIL" })
+  assert.deepEqual(findLeak(JSON.stringify({ model: "m", messages: [{ role: "user", content: deep }, { role: "user", content: "alice@corp.io" }] }), patterns, session()), { category: "EMAIL" })
+})

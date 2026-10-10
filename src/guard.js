@@ -19,7 +19,14 @@ function collect(value, out, depth) {
     out.push(text)
     if (depth < MAX_JSON_DEPTH) {
       const nested = parseNested(text)
-      if (nested !== undefined) collect(nested, out, depth + 1)
+      if (nested !== undefined) {
+        try {
+          collect(nested, out, depth + 1)
+        } catch (error) {
+          // Hostile deep JSON overflows the stack; the raw string is already in `out`.
+          if (!(error instanceof RangeError)) throw error
+        }
+      }
     }
     return text
   })

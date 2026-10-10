@@ -33,7 +33,7 @@ Placeholders are `HMAC-SHA256(key, value)` truncated to 12 hex chars. The key li
 
 If the key file is readable by others, the plugin tightens it to 0600; if it cannot, every request is blocked.
 
-`patterns.exclude` entries match exactly or by domain: `example.com` also covers `a@example.com` and `a@mail.example.com`, but not `a@notexample.com`. Comparison ignores case. This applies to every rule, keywords included. For example, with `exclude: ["example.com"]` the keyword `boss@example.com` is not masked.
+`patterns.exclude` entries match exactly or by domain: `example.com` also covers `a@example.com` and `a@mail.example.com`, but not `a@notexample.com`. Comparison ignores case. Domain matching applies only to address- or host-shaped matches (for example `user@example.com`, `api.example.com`); a credential such as `user:pass@localhost` is still masked. This applies to every rule, keywords included. For example, with `exclude: ["example.com"]` the keyword `boss@example.com` is not masked.
 
 `session.ttl` sets how long a mapping lives (default `24h`); `"0s"` means mappings never expire by age (`session.max_mappings` still applies).
 
@@ -43,6 +43,7 @@ Set `"debug": true` to log one line per request: `kind=<kind> replaced=<n>` and 
 
 - Model replies on screen show placeholders; files and commands get the real values.
 - Tools receive real values, so a tool that sends data out (`curl` in `bash`) can send a secret. This plugin keeps secrets away from the LLM provider, not from tools.
+- A secret that appears only inside JSON-encoded text (for example a password in a notebook cell or an escaped JSON string in a tool result) is not masked; the guard detects it and will block the request, so the session must drop that message.
 - Tool descriptions are not redacted; if one matches a rule, requests are blocked until the value is added to `patterns.exclude`.
 
 ## Develop
