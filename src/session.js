@@ -1,4 +1,4 @@
-import { createHmac, randomBytes } from "node:crypto"
+import { createHmac } from "node:crypto"
 
 function sanitizeCategory(input) {
   const raw = String(input ?? "").trim()
@@ -21,14 +21,17 @@ function toHexLower(buffer) {
  */
 export class PlaceholderSession {
   /**
-   * @param {{ prefix: string, ttlMs: number, maxMappings: number, secret?: Uint8Array }} options
+   * @param {{ prefix: string, ttlMs: number, maxMappings: number, secret: Uint8Array }} options
    */
   constructor(options) {
     const prefix = String(options?.prefix ?? "__VG_")
     this.prefix = prefix
     this.ttlMs = Number.isFinite(options?.ttlMs) ? Number(options.ttlMs) : 60 * 60 * 1000
     this.maxMappings = Number.isFinite(options?.maxMappings) ? Number(options.maxMappings) : 100000
-    this.secret = options?.secret ? Uint8Array.from(options.secret) : randomBytes(32)
+    // The key comes from key.js: a random per-process key would change every placeholder
+    // after an OpenCode restart, while the stored replies still hold the old ones.
+    if (!options?.secret || options.secret.length !== 32) throw new Error("PlaceholderSession needs a 32-byte secret")
+    this.secret = Uint8Array.from(options.secret)
 
     /** @type {Map<string,string>} */
     this.forward = new Map()
@@ -70,6 +73,10 @@ export class PlaceholderSession {
 
   lookupReverse(original) {
     return this.reverse.get(original)
+  }
+
+  knownEntries() {
+    return this.reverse.entries()
   }
 
   /**
