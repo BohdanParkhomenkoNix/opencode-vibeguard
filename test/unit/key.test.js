@@ -104,3 +104,35 @@ test("a temp key file left by a dead process is removed; others stay", (t) => {
   loadKey(path.join(dir, "vibeguard.key"))
   assert.deepEqual(readdirSync(dir).sort(), [live, ...unrelated, "vibeguard.key"].sort())
 })
+
+test("a temp-name collision is reported, and the other file is left alone", (t) => {
+  const dir = tmpdir(t)
+  let unlinked = 0
+  const colliding = {
+    ...fs,
+    writeFileSync() {
+      throw Object.assign(new Error("exists"), { code: "EEXIST" })
+    },
+    unlinkSync(p) {
+      unlinked++
+      return fs.unlinkSync(p)
+    },
+  }
+  assert.throws(() => loadKey(path.join(dir, "vibeguard.key"), colliding), /cannot create key file .*: EEXIST/)
+  assert.equal(unlinked, 0, "unlinked a temp file this process never wrote")
+})
+
+test("a stat failure is a key file error", (t) => {
+  const file = path.join(tmpdir(t), "vibeguard.key")
+  writeFileSync(file, Buffer.alloc(KEY_BYTES, 1), { mode: 0o600 })
+  const failing = { ...fs, statSync() { throw Object.assign(new Error("denied"), { code: "EACCES" }) } }
+  assert.throws(() => loadKey(file, failing), /cannot stat key file .*: EACCES/)
+})
+
+test("an error without a code reads 'unknown error', not 'undefined'", (t) => {
+  const file = path.join(tmpdir(t), "vibeguard.key")
+  writeFileSync(file, Buffer.alloc(KEY_BYTES, 1))
+  chmodSync(file, 0o644)
+  const failing = { ...fs, chmodSync() { throw new Error("boom") } }
+  assert.throws(() => loadKey(file, failing), (e) => /chmod failed: unknown error/.test(e.message) && !e.message.includes("undefined"))
+})

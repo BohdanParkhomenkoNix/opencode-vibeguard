@@ -9,6 +9,8 @@ export function defaultKeyFile() {
   return path.join(os.homedir(), ".config", "opencode", "vibeguard.key")
 }
 
+const codeOf = (error) => error?.code ?? "unknown error"
+
 const TEMP_SUFFIX = /^(\d+)\.[0-9a-f]{8}\.tmp$/
 
 function isAlive(pid) {
@@ -53,27 +55,45 @@ function createKey(file, fs) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   removeOrphanTemps(file, fs)
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`
+  let written = false
   try {
-    fs.writeFileSync(tmp, randomBytes(KEY_BYTES), { mode: 0o600, flag: "wx" })
-    fs.linkSync(tmp, file)
-  } catch (error) {
-    if (error.code !== "EEXIST") throw new Error(`cannot create key file ${file}: ${error.code}`)
-  } finally {
     try {
-      fs.unlinkSync(tmp)
-    } catch {
-      // Nothing to remove: the temp file was never written.
+      fs.writeFileSync(tmp, randomBytes(KEY_BYTES), { mode: 0o600, flag: "wx" })
+      written = true
+    } catch (error) {
+      throw new Error(`cannot create key file ${file}: ${codeOf(error)}`)
+    }
+    try {
+      fs.linkSync(tmp, file)
+    } catch (error) {
+      // EEXIST: another process linked its key first, and that key wins.
+      if (error?.code !== "EEXIST") throw new Error(`cannot create key file ${file}: ${codeOf(error)}`)
+    }
+  } finally {
+    // Only our own temp file: on a name collision the file belongs to someone else.
+    if (written) {
+      try {
+        fs.unlinkSync(tmp)
+      } catch {
+        // Already gone.
+      }
     }
   }
 }
 
 /** The key turns placeholders back into guesses for short secrets: nobody else may read it. */
 function ensureOwnerOnly(file, fs) {
-  if ((fs.statSync(file).mode & 0o077) === 0) return
+  let mode
+  try {
+    mode = fs.statSync(file).mode
+  } catch (error) {
+    throw new Error(`cannot stat key file ${file}: ${codeOf(error)}`)
+  }
+  if ((mode & 0o077) === 0) return
   try {
     fs.chmodSync(file, 0o600)
   } catch (error) {
-    throw new Error(`key file ${file} is accessible by others and chmod failed: ${error.code}`)
+    throw new Error(`key file ${file} is accessible by others and chmod failed: ${codeOf(error)}`)
   }
 }
 
@@ -87,7 +107,7 @@ export function loadKey(file = defaultKeyFile(), fs = nodeFs) {
   try {
     key = fs.readFileSync(file)
   } catch (error) {
-    if (error.code !== "ENOENT") throw new Error(`cannot read key file ${file}: ${error.code}`)
+    if (error.code !== "ENOENT") throw new Error(`cannot read key file ${file}: ${codeOf(error)}`)
     createKey(file, fs)
     key = fs.readFileSync(file)
   }
