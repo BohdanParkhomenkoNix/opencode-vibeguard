@@ -1,5 +1,6 @@
 import { redactText } from "./engine.js"
 import { escapedViews } from "./escapes.js"
+import { knownMatcher } from "./known.js"
 import { mapStrings } from "./messages.js"
 import { getPlaceholderRegex } from "./session.js"
 
@@ -53,10 +54,9 @@ function categoryOf(placeholder, prefix) {
   return placeholder.slice(prefix.length).replace(/_[0-9a-fA-F]{12}(?:_\d+)?__$/, "")
 }
 
-function leakIn(text, known, patterns, prefix) {
-  for (const [original, placeholder] of known) {
-    if (text.includes(original)) return { category: categoryOf(placeholder, prefix) }
-  }
+function leakIn(text, known, placeholderOf, patterns, prefix) {
+  const original = known.find(text)
+  if (original !== null) return { category: categoryOf(placeholderOf.get(original), prefix) }
   let category = null
   redactText(text, patterns, {
     getOrCreatePlaceholder(_original, ruleCategory) {
@@ -75,11 +75,12 @@ function leakIn(text, known, patterns, prefix) {
 export function findLeak(bodyText, patterns, session) {
   if (!bodyText) return null
   const placeholders = getPlaceholderRegex(session.prefix)
-  const known = [...session.knownEntries()]
+  const placeholderOf = new Map(session.knownEntries())
+  const known = knownMatcher([...placeholderOf.keys()])
   for (const raw of stringsOf(bodyText)) {
     const text = raw.replace(placeholders, " ")
     for (const view of [text, ...escapedViews(text)]) {
-      const leak = leakIn(view, known, patterns, session.prefix)
+      const leak = leakIn(view, known, placeholderOf, patterns, session.prefix)
       if (leak) return leak
     }
   }
