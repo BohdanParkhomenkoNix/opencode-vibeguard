@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { mapStrings, redactRequest, redactStrings, restoreStrings, SKIP_KEYS } from "../../src/messages.js"
 import { BUILTIN_NAMES, buildPatternSet } from "../../src/patterns.js"
 import { findLeak } from "../../src/guard.js"
+import { restoreText } from "../../src/restore.js"
 import { PlaceholderSession } from "../../src/session.js"
 
 const SECRET = "hunter2-very-secret"
@@ -292,4 +293,27 @@ test("an existing placeholder next to an escaped value stays intact", () => {
   const text = messages[0].content[0].result.value[0].text
   assert.ok(text.startsWith(`${prior} `), text)
   assert.ok(!text.includes("Ab12"), text)
+})
+
+test("a JSON-escaped PEM that a rule matches whole restores to the exact text it replaced", () => {
+  const body = ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"]
+  const pem = ["-----BEGIN PRIVATE KEY-----", ...body, "-----END PRIVATE KEY-----", ""].join("\\n")
+  const input = String.raw`Read file /tmp/sa.json, lines 1-1` + "\n" + `1: {"project_id": "demo", "private_key": "${pem}"}`
+  const s = session()
+  const messages = [{ role: "assistant", content: [toolResult(input)] }]
+  redactRequest([[], messages], buildPatternSet({ builtin: ["private_key"] }), s)
+  const masked = messages[0].content[0].result.value[0].text
+  for (const line of body) assert.ok(!masked.includes(line), `key body left: ${masked}`)
+  assert.equal(restoreText(masked, s), input)
+})
+
+test("a value a custom rule matches whole inside JSON escapes restores byte-exact", () => {
+  const rules = buildPatternSet({ regex: [{ pattern: String.raw`(?<=token=)\S+`, category: "token" }] })
+  const input = String.raw`{"cmd": "curl -H token=\"abc123xyz\" host"}`
+  const s = session()
+  const messages = [{ role: "assistant", content: [toolResult(input)] }]
+  redactRequest([[], messages], rules, s)
+  const masked = messages[0].content[0].result.value[0].text
+  assert.ok(!masked.includes("abc123xyz"), masked)
+  assert.equal(restoreText(masked, s), input)
 })

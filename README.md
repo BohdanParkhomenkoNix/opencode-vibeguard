@@ -44,6 +44,7 @@ Set `"debug": true` to log one line per request: `kind=<kind> replaced=<n>` and 
 - Model replies on screen show placeholders; files and commands get the real values.
 - Tools receive real values, so a tool that sends data out (`curl` in `bash`) can send a secret. This plugin keeps secrets away from the LLM provider, not from tools.
 - A secret inside escaped text (JSON strings, notebook cells, `read` output) is masked through up to 3 levels of JSON escaping, `\/` and `\uXXXX` included. Other JSON escape spellings (uppercase `\u00E4`-style hex, a doubly escaped `\/`) are still seen by the guard, which blocks the request; drop that message to continue. Deeper nesting and non-JSON encodings (base64, URL encoding) are not detected.
+- A placeholder restores the exact text it replaced, so a secret copied into another format (for example a JSON-escaped PEM written to a `.pem` file) keeps the escaping it had where it was read. Move secrets between formats with a command on the file (`jq -r .private_key sa.json > key.pem`), not through the model.
 - Tool descriptions are not redacted; if one matches a rule, requests are blocked until the value is added to `patterns.exclude`.
 - opencode's own local logs and session storage keep plaintext; this plugin controls only what is sent to the LLM provider.
 

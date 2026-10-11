@@ -105,20 +105,20 @@ test("a known value written escaped inside non-JSON text is caught", () => {
   assert.deepEqual(findLeak(body('1: {"cmd": "echo pa\\"ss-word-42"}  trailing'), patterns, s), { category: "TEST" })
 })
 
-const manyKnown = () => {
+const manyKnown = (count = 3000) => {
   const s = new PlaceholderSession({ prefix: "__VG_", ttlMs: 0, maxMappings: 100000, secret: Buffer.alloc(32, 7) })
-  for (let i = 0; i < 3000; i++) s.getOrCreatePlaceholder(`Fake/${String(i).padStart(5, "0")}/Value+Xy`, "known")
+  for (let i = 0; i < count; i++) s.getOrCreatePlaceholder(`Fake/${String(i).padStart(5, "0")}/Value+Xy`, "known")
   return s
 }
 
 test("the known-value check scales to thousands of values and strings", () => {
-  const s = manyKnown()
+  const s = manyKnown(10000)
   const messages = Array.from({ length: 10000 }, (_, i) => ({ role: "user", content: [{ type: "text", text: `line ${i} with nothing secret in it at all, just some ordinary words` }] }))
   const started = performance.now()
   assert.equal(findLeak(JSON.stringify({ messages }), buildPatternSet({}), s), null)
   const elapsed = performance.now() - started
-  // 0.2.3 took about 710 ms here (includes per mapping per string).
-  assert.ok(elapsed < 250, `guard took ${elapsed.toFixed(0)} ms`)
+  // 0.2.3 took about 2600 ms here: it checked every mapping against every string.
+  assert.ok(elapsed < 1200, `guard took ${elapsed.toFixed(0)} ms`)
 })
 
 test("a known value in the matcher's last chunk is still caught", () => {

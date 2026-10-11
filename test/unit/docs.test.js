@@ -42,6 +42,11 @@ test("README limits: escaped secrets are masked; domain exclude is address-shape
   assert.match(readme, /address- or host-shaped[^\n]*user:pass@localhost[^\n]*masked/)
 })
 
+test("README limits: a placeholder restores the exact text it replaced", () => {
+  const readme = read("README.md")
+  assert.match(readme, /placeholder restores the exact text it replaced[^\n]*JSON-escaped PEM[^\n]*jq -r \.private_key sa\.json > key\.pem/)
+})
+
 test("README: exclude normalization, broad entries, local logs", () => {
   const readme = read("README.md")
   assert.match(readme, /leading `@` or `\*\.` is dropped/)

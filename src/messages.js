@@ -56,26 +56,49 @@ export function mapStrings(root, fn, skip = NO_SKIP) {
   return changed
 }
 
+/** Runs the rules on text and returns what they match, registering nothing. */
+function matchesIn(text, patterns) {
+  const found = []
+  redactText(text, patterns, {
+    getOrCreatePlaceholder(original, category) {
+      found.push({ original, category })
+      return ""
+    },
+  })
+  return found
+}
+
 /**
  * Values the rules find in the views of a gap (JSON escapes undone), registered only when the gap
  * spells them in a form the replacement can find; a value seen only in a view would take a
- * max_mappings slot for nothing. Returns needle → placeholder.
+ * max_mappings slot for nothing. A placeholder restores exactly the bytes it replaced: a needle
+ * the rules match whole in the raw gap keeps its own mapping, and only a spelling the raw rules
+ * would split takes the decoded value's placeholder. Returns needle -> placeholder.
  */
 function learnFromViews(gap, patterns, session) {
-  const learned = new Map()
+  const kept = []
   for (const view of escapedViews(gap)) {
-    const candidates = []
-    redactText(view, patterns, {
-      getOrCreatePlaceholder(original, category) {
-        candidates.push({ original, category })
-        return ""
-      },
-    })
-    for (const { original, category } of candidates) {
+    for (const { original, category } of matchesIn(view, patterns)) {
       const needles = [original, ...escapedForms(original)].filter((n) => gap.includes(n))
-      if (needles.length === 0) continue
-      const placeholder = session.getOrCreatePlaceholder(original, category)
-      for (const n of needles) learned.set(n, placeholder)
+      if (needles.length > 0) kept.push({ original, category, needles })
+    }
+  }
+  if (kept.length === 0) return new Map()
+
+  const rawHits = new Set(matchesIn(gap, patterns).map((hit) => hit.original))
+  const learned = new Map()
+  const decoded = new Map()
+  const placeholderOf = (original, category) => {
+    if (!decoded.has(original)) decoded.set(original, session.getOrCreatePlaceholder(original, category))
+    return decoded.get(original)
+  }
+  for (const { original, category, needles } of kept) {
+    if (needles.includes(original) && !learned.has(original)) learned.set(original, placeholderOf(original, category))
+  }
+  for (const { original, category, needles } of kept) {
+    for (const n of needles) {
+      if (n === original || learned.has(n)) continue
+      learned.set(n, rawHits.has(n) ? session.getOrCreatePlaceholder(n, category) : placeholderOf(original, category))
     }
   }
   return learned

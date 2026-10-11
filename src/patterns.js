@@ -158,7 +158,7 @@ export function buildPatternSet(patterns) {
   for (const [i, name] of listOf(raw, "builtin").entries()) {
     if (typeof name !== "string") fail(`patterns.builtin[${i}] must be a string`)
     const rule = BUILTIN.get(name.trim())
-    if (!rule) fail(`unknown builtin rule "${name}"; known: ${BUILTIN_NAMES.join(", ")}`)
+    if (!rule) fail(`patterns.builtin[${i}] is not a known builtin rule; known: ${BUILTIN_NAMES.join(", ")}`)
     regex.push({ pattern: rule.pattern, flags: rule.flags, category: rule.category })
   }
 

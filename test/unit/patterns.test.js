@@ -50,7 +50,10 @@ test("every new rule is a known builtin", () => {
 })
 
 test("an unknown builtin is an error", () => {
-  assert.throws(() => buildPatternSet({ builtin: ["nope"] }), /unknown builtin rule "nope"/)
+  assert.throws(
+    () => buildPatternSet({ builtin: ["email", "nope-entry"] }),
+    (error) => /^patterns\.builtin\[1\] is not a known builtin rule; known: /.test(error.message) && !error.message.includes("nope-entry"),
+  )
 })
 
 test("a broken regex is an error that names its category", () => {
