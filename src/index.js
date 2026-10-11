@@ -22,10 +22,13 @@ async function bodyText(request) {
   throw new Error("vibeguard: cannot read the request body")
 }
 
-/** If OpenCode ever sends a request whose hook failed, it goes out empty. */
+/** If OpenCode ever sends a request whose hook failed, it goes out empty, whatever shape it has. */
 function block(event) {
   for (const key of ["system", "messages"]) {
-    if (Array.isArray(event?.[key])) event[key].length = 0
+    const value = event?.[key]
+    if (Array.isArray(value)) value.length = 0
+    else if (typeof value === "string") event[key] = ""
+    else if (value !== null && value !== undefined) event[key] = []
   }
 }
 
