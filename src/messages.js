@@ -1,5 +1,6 @@
 import { redactText } from "./engine.js"
 import { escapedForms, escapedViews } from "./escapes.js"
+import { knownMatcher, mapGaps } from "./known.js"
 import { restoreText } from "./restore.js"
 import { getPlaceholderRegex } from "./session.js"
 
@@ -56,21 +57,6 @@ export function mapStrings(root, fn, skip = NO_SKIP) {
 }
 
 /**
- * Applies fn to the text between placeholders only. A placeholder already in the history is a
- * finished replacement: a rule matching inside it would wrap it in a second placeholder, and
- * restore would then give a tool the inner placeholder instead of the value.
- */
-function mapGaps(text, placeholders, fn) {
-  let out = ""
-  let last = 0
-  for (const m of text.matchAll(placeholders)) {
-    out += fn(text.slice(last, m.index)) + m[0]
-    last = m.index + m[0].length
-  }
-  return out + fn(text.slice(last))
-}
-
-/**
  * Rules run on the text and, to learn values only, on its views with JSON escapes undone:
  * `password = \"…\"` in a notebook read with `read` only matches once `\"` is undone. The
  * known-value pass then replaces the value in whatever escaped form it takes in the text.
@@ -97,10 +83,9 @@ function knownPass(root, session) {
     for (const form of escapedForms(original)) if (!originalOf.has(form)) originalOf.set(form, original)
   }
   if (originalOf.size === 0) return 0
-  const needles = [...originalOf.keys()].sort((a, b) => b.length - a.length)
-  const known = new RegExp(needles.map((o) => o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g")
+  const known = knownMatcher([...originalOf.keys()])
   const placeholders = getPlaceholderRegex(session.prefix)
-  return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => gap.replace(known, (found) => session.lookupReverse(originalOf.get(found)))), SKIP_KEYS)
+  return mapStrings(root, (text) => known.replaceIn(text, placeholders, (found) => session.lookupReverse(originalOf.get(found))), SKIP_KEYS)
 }
 
 /** Redacts one tree: rules first, then the values they learned. Returns the number of strings changed. */

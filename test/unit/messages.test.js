@@ -208,7 +208,8 @@ const CASES = {
 for (const [name, [value, make]] of Object.entries(CASES)) {
   test(`escaped secret is masked: ${name}`, () => {
     const { text, body, s } = maskedResult(make(value))
-    assert.ok(!text.includes(value) && !text.includes(value.replaceAll("/", "\\/")), "value left in the tool result")
+    assert.ok(!text.includes(value), "value left in the tool result")
+    if (value.includes("/")) assert.ok(!text.includes(value.replaceAll("/", "\\/")), "escaped value left in the tool result")
     assert.match(text, /__VG_[A-Z_]+_[0-9a-f]{12}__/)
     assert.equal(findLeak(body, escapedRules, s), null)
   })
@@ -242,4 +243,19 @@ test("a value written with \\uXXXX escapes is masked", () => {
 test("a spelling the masker cannot rewrite is blocked by the guard", () => {
   const { body, s } = maskedResult(String.raw`{"password": "p\u00E4ssw\u00F6rd99x"}`, noBackslashRules)
   assert.deepEqual(findLeak(body, noBackslashRules, s), { category: "SECRET_VALUE" })
+})
+
+test("thousands of known values are all replaced, fast", () => {
+  const s = new PlaceholderSession({ prefix: "__VG_", ttlMs: 0, maxMappings: 100000, secret: Buffer.alloc(32, 7) })
+  const values = Array.from({ length: 3000 }, (_, i) => `Fake/${String(i).padStart(5, "0")}/Value+Xy`)
+  for (const v of values) s.getOrCreatePlaceholder(v, "known")
+  const text = values.map((v, i) => `k${i}=${v.replaceAll("/", "\\/")}`).join("\n")
+  const messages = [{ role: "user", content: [{ type: "text", text }] }]
+  const started = performance.now()
+  redactStrings(messages, buildPatternSet({}), s)
+  const elapsed = performance.now() - started
+  const out = messages[0].content[0].text
+  assert.equal(values.filter((v) => out.includes(v.replaceAll("/", "\\/"))).length, 0)
+  // 0.2.3 took about 6.7 s here (one 6000-way alternation); the chunked matcher takes tens of ms.
+  assert.ok(elapsed < 1500, `known-value pass took ${elapsed.toFixed(0)} ms`)
 })
