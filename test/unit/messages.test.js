@@ -259,3 +259,37 @@ test("thousands of known values are all replaced, fast", () => {
   // 0.2.3 took about 6.7 s here (one 6000-way alternation); the chunked matcher takes tens of ms.
   assert.ok(elapsed < 1500, `known-value pass took ${elapsed.toFixed(0)} ms`)
 })
+
+const blobRule = buildPatternSet({ regex: [{ pattern: "[A-Za-z0-9/+]{20,}", category: "blob" }] })
+
+test("a context-free rule with / masks the whole PHP-escaped value, prefix included", () => {
+  const { text, body, s } = maskedResult(String.raw`{"k":"Ab12\/Cd34Ef56Gh78Ij90Kl12Mn"}`, blobRule)
+  assert.ok(!text.includes("Ab12"), `prefix left: ${text}`)
+  assert.match(text, /^\{"k":"__VG_BLOB_[0-9a-f]{12}__"\}$/)
+  assert.equal(findLeak(body, blobRule, s), null)
+})
+
+test("a value seen only in a view, spelled in none of its forms, is not registered", () => {
+  // Uppercase \u00E4: the view decodes it, but no escaped form of the value is spelled that way.
+  const { s, body } = maskedResult(String.raw`{"password": "p\u00E4ssw\u00F6rd99x"}`, noBackslashRules)
+  assert.equal([...s.knownEntries()].length, 0)
+  // Still blocked by the guard, as in 0.2.3.
+  assert.deepEqual(findLeak(body, noBackslashRules, s), { category: "SECRET_VALUE" })
+})
+
+test("one value spelled escaped and plain in one gap gets one placeholder", () => {
+  const { text } = maskedResult(String.raw`{"k":"Ab12\/Cd34Ef56Gh78Ij90Kl12Mn"} and Ab12/Cd34Ef56Gh78Ij90Kl12Mn`, blobRule)
+  const found = text.match(/__VG_BLOB_[0-9a-f]{12}__/g)
+  assert.equal(found.length, 2)
+  assert.equal(new Set(found).size, 1)
+})
+
+test("an existing placeholder next to an escaped value stays intact", () => {
+  const s = session()
+  const prior = s.getOrCreatePlaceholder("Zz99/Yy88Xx77Ww66Vv55Uu44", "blob")
+  const messages = [{ role: "assistant", content: [toolResult(String.raw`${prior} {"k":"Ab12\/Cd34Ef56Gh78Ij90Kl12Mn"}`)] }]
+  redactRequest([[], messages], blobRule, s)
+  const text = messages[0].content[0].result.value[0].text
+  assert.ok(text.startsWith(`${prior} `), text)
+  assert.ok(!text.includes("Ab12"), text)
+})

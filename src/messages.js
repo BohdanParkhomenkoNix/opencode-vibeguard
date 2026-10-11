@@ -57,15 +57,41 @@ export function mapStrings(root, fn, skip = NO_SKIP) {
 }
 
 /**
- * Rules run on the text and, to learn values only, on its views with JSON escapes undone:
- * `password = \"…\"` in a notebook read with `read` only matches once `\"` is undone. The
- * known-value pass then replaces the value in whatever escaped form it takes in the text.
+ * Values the rules find in the views of a gap (JSON escapes undone), registered only when the gap
+ * spells them in a form the replacement can find; a value seen only in a view would take a
+ * max_mappings slot for nothing. Returns needle → placeholder.
+ */
+function learnFromViews(gap, patterns, session) {
+  const learned = new Map()
+  for (const view of escapedViews(gap)) {
+    const candidates = []
+    redactText(view, patterns, {
+      getOrCreatePlaceholder(original, category) {
+        candidates.push({ original, category })
+        return ""
+      },
+    })
+    for (const { original, category } of candidates) {
+      const needles = [original, ...escapedForms(original)].filter((n) => gap.includes(n))
+      if (needles.length === 0) continue
+      const placeholder = session.getOrCreatePlaceholder(original, category)
+      for (const n of needles) learned.set(n, placeholder)
+    }
+  }
+  return learned
+}
+
+/**
+ * Values learned from the views are replaced in every escaped form first, then the rules run on
+ * what is left of the raw text. In the other order a rule whose class includes `/` masks only the
+ * part of `abc\/def…` after the backslash, and `abc\/` reaches the provider.
  */
 function rulePass(root, patterns, session) {
   const placeholders = getPlaceholderRegex(session.prefix)
   return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => {
-    for (const view of escapedViews(gap)) redactText(view, patterns, session)
-    return redactText(gap, patterns, session).text
+    const learned = learnFromViews(gap, patterns, session)
+    const masked = learned.size === 0 ? gap : knownMatcher([...learned.keys()]).replaceIn(gap, placeholders, (found) => learned.get(found))
+    return mapGaps(masked, placeholders, (rest) => redactText(rest, patterns, session).text)
   }), SKIP_KEYS)
 }
 
