@@ -119,3 +119,25 @@ test("exclude by domain applies to keywords", () => {
   const cfg = { builtin: [], keywords: [{ value: "boss@example.com", category: "NAME" }], exclude: ["example.com"] }
   assert.deepEqual(maskedBy("ping boss@example.com", cfg), [])
 })
+
+test("exclude entries are normalized: spaces, case, leading @ and *.", () => {
+  for (const entry of [" example.com ", "@example.com", "*.example.com", "EXAMPLE.com"]) {
+    assert.deepEqual([...buildPatternSet({ exclude: [entry] }).exclude], ["example.com"], entry)
+    assert.deepEqual(excluded("mail a@example.com", [entry]), [], entry)
+  }
+})
+
+test("an exact mixed-case email entry still excludes exactly that address", () => {
+  assert.deepEqual(excluded("boss@example.com other@example.com", ["Boss@Example.com"]), ["other@example.com"])
+})
+
+test("an empty, spaced or non-string exclude entry is an error naming its position only", () => {
+  assert.throws(() => buildPatternSet({ exclude: ["ok.com", "  "] }), /patterns\.exclude\[1\] is empty or contains spaces/)
+  assert.throws(() => buildPatternSet({ exclude: ["@"] }), /patterns\.exclude\[0\] is empty or contains spaces/)
+  assert.throws(() => buildPatternSet({ exclude: ["a b.com"] }), (e) => /patterns\.exclude\[0\] is empty or contains spaces/.test(e.message) && !e.message.includes("a b.com"))
+  assert.throws(() => buildPatternSet({ exclude: [null] }), /patterns\.exclude\[0\] must be a string/)
+})
+
+test("a non-string builtin entry is an error naming its position", () => {
+  assert.throws(() => buildPatternSet({ builtin: ["email", { name: "jwt" }] }), (e) => /patterns\.builtin\[1\] must be a string/.test(e.message) && !e.message.includes("[object Object]"))
+})
