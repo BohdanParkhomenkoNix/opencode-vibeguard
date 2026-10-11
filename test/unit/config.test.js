@@ -11,7 +11,10 @@ function setup(t) {
   withHome(t, home)
   const prev = process.env.OPENCODE_VIBEGUARD_CONFIG
   delete process.env.OPENCODE_VIBEGUARD_CONFIG
-  t.after(() => { if (prev !== undefined) process.env.OPENCODE_VIBEGUARD_CONFIG = prev })
+  t.after(() => {
+    if (prev === undefined) delete process.env.OPENCODE_VIBEGUARD_CONFIG
+    else process.env.OPENCODE_VIBEGUARD_CONFIG = prev
+  })
   const write = (file, value) => {
     mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(file, typeof value === "string" ? value : JSON.stringify(value))
@@ -96,4 +99,22 @@ test("bad field types and durations are errors", async (t) => {
   await assert.rejects(loadConfig(project), /placeholder_prefix/)
   write(file, { enabled: true, key_file: 7 })
   await assert.rejects(loadConfig(project), /key_file/)
+})
+
+test("a ttl error does not echo the value", async (t) => {
+  const { project, write } = setup(t)
+  write(path.join(project, "vibeguard.config.json"), { enabled: true, session: { ttl: "Leak-Me-42" } })
+  await assert.rejects(loadConfig(project), (e) => /session\.ttl must look like 30m, 24h or 7d/.test(e.message) && !e.message.includes("Leak-Me-42"))
+})
+
+test("~user/ in key_file is an error", async (t) => {
+  const { project, write } = setup(t)
+  write(path.join(project, "vibeguard.config.json"), { enabled: true, key_file: "~someone/vibeguard.key" })
+  await assert.rejects(loadConfig(project), /only ~\/ is supported in key_file/)
+})
+
+test("~user/ in OPENCODE_VIBEGUARD_CONFIG is an error", async (t) => {
+  const { project } = setup(t)
+  process.env.OPENCODE_VIBEGUARD_CONFIG = "~someone/vg.json"
+  await assert.rejects(loadConfig(project), /only ~\/ is supported in OPENCODE_VIBEGUARD_CONFIG/)
 })

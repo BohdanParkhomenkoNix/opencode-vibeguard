@@ -12,12 +12,19 @@ function fail(file, message) {
 
 function parseDurationMs(input, file) {
   const m = String(input).trim().match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/)
-  if (!m) fail(file, `session.ttl "${input}" must look like 30m, 24h or 7d`)
+  if (!m) fail(file, "session.ttl must look like 30m, 24h or 7d")
   return Number(m[1]) * UNITS[m[2]]
 }
 
-function expandHome(p) {
-  return p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p
+/** `~` and `~/…` only: `~user/…` would need another user's home and is an error, not a relative path. */
+function expandHome(p, field, file) {
+  if (p === "~" || p.startsWith("~/")) return path.join(os.homedir(), p.slice(1))
+  if (p.startsWith("~")) {
+    const message = `only ~/ is supported in ${field}`
+    if (file) fail(file, message)
+    throw new Error(message)
+  }
+  return p
 }
 
 async function readJson(file) {
@@ -49,7 +56,7 @@ function normalizeConfig(raw, file) {
   if (!Number.isInteger(maxMappings) || maxMappings <= 0) fail(file, "session.max_mappings must be a positive integer")
 
   if (raw.key_file !== undefined && (typeof raw.key_file !== "string" || !raw.key_file)) fail(file, "key_file must be a non-empty string")
-  const keyFile = raw.key_file ? path.resolve(path.dirname(file), expandHome(raw.key_file)) : defaultKeyFile()
+  const keyFile = raw.key_file ? path.resolve(path.dirname(file), expandHome(raw.key_file, "key_file", file)) : defaultKeyFile()
 
   return {
     enabled: raw.enabled === true,
@@ -70,7 +77,7 @@ export function getConfigCandidates(directory) {
     path.join(os.homedir(), ".config", "opencode", "vibeguard.config.json"),
   ]
   const env = process.env.OPENCODE_VIBEGUARD_CONFIG
-  return env ? [path.resolve(dir, expandHome(env)), ...candidates] : candidates
+  return env ? [path.resolve(dir, expandHome(env, "OPENCODE_VIBEGUARD_CONFIG")), ...candidates] : candidates
 }
 
 /** First existing candidate wins. None at all: disabled, a deliberate off switch. An env path that does not exist is an error. */
