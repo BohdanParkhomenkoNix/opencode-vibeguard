@@ -33,7 +33,7 @@ Placeholders are `HMAC-SHA256(key, value)` truncated to 12 hex chars. The key li
 
 If the key file is readable by others, the plugin tightens it to 0600; if it cannot, every request is blocked.
 
-`patterns.exclude` entries match exactly or by domain: `example.com` also covers `a@example.com` and `a@mail.example.com`, but not `a@notexample.com`. Comparison ignores case. Domain matching applies only to address- or host-shaped matches (for example `user@example.com`, `api.example.com`); a credential such as `user:pass@localhost` is still masked. This applies to every rule, keywords included. For example, with `exclude: ["example.com"]` the keyword `boss@example.com` is not masked.
+`patterns.exclude` entries match exactly or by domain: `example.com` also covers `a@example.com` and `a@mail.example.com`, but not `a@notexample.com`. Comparison ignores case. Domain matching applies only to address- or host-shaped matches (for example `user@example.com`, `api.example.com`); a credential such as `user:pass@localhost` is still masked. This applies to every rule, keywords included. For example, with `exclude: ["example.com"]` the keyword `boss@example.com` is not masked. Entries are trimmed and lowercased, and a leading `@` or `*.` is dropped, so `@example.com` and `*.example.com` both mean `example.com`, which also covers the domain itself and every host under it. A broad entry such as `com` or `io` exempts every address and host under it.
 
 `session.ttl` sets how long a mapping lives (default `24h`); `"0s"` means mappings never expire by age (`session.max_mappings` still applies).
 
@@ -45,6 +45,7 @@ Set `"debug": true` to log one line per request: `kind=<kind> replaced=<n>` and 
 - Tools receive real values, so a tool that sends data out (`curl` in `bash`) can send a secret. This plugin keeps secrets away from the LLM provider, not from tools.
 - A secret inside escaped text (JSON strings, notebook cells, `read` output) is masked through up to 3 levels of JSON escaping, `\/` and `\uXXXX` included. Other JSON escape spellings (uppercase `\u00E4`-style hex, a doubly escaped `\/`) are still seen by the guard, which blocks the request; drop that message to continue. Deeper nesting and non-JSON encodings (base64, URL encoding) are not detected.
 - Tool descriptions are not redacted; if one matches a rule, requests are blocked until the value is added to `patterns.exclude`.
+- opencode's own local logs and session storage keep plaintext; this plugin controls only what is sent to the LLM provider.
 
 ## Develop
 

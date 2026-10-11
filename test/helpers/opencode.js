@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { tmpdir } from "./tmp.js"
 
-// V2 loads a plugin from a directory (package.json main/exports), not from a file path.
+// V2 loads a plugin from a directory, not a file path; for a local directory it resolves <dir>/index… before package.json (docs/v2-facts.md R1a), so the repo root loads index.js.
 export const PLUGIN_ENTRY = new URL("../..", import.meta.url).href.replace(/\/$/, "")
 
 function isolatedEnv(home) {
