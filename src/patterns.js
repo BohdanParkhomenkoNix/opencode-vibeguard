@@ -111,6 +111,19 @@ function listOf(raw, key) {
 }
 
 /**
+ * One spelling per entry, decided once: `@example.com` and `*.example.com` mean `example.com`
+ * (which also covers the domain itself and every host under it). Messages name the position only.
+ */
+function normalizeExclude(x, i) {
+  if (typeof x !== "string") fail(`patterns.exclude[${i}] must be a string`)
+  let entry = x.trim().toLowerCase()
+  if (entry.startsWith("*.")) entry = entry.slice(2)
+  if (entry.startsWith("@")) entry = entry.slice(1)
+  if (!entry || /\s/.test(entry)) fail(`patterns.exclude[${i}] is empty or contains spaces`)
+  return entry
+}
+
+/**
  * Strict on purpose: a rule that silently drops out stops hiding its secret, so any
  * malformed rule is an error the caller turns into a blocked request.
  * Messages name positions and categories, never keyword values.
@@ -142,12 +155,13 @@ export function buildPatternSet(patterns) {
     return { pattern: peeled.pattern, flags: peeled.flags, category }
   })
 
-  for (const name of listOf(raw, "builtin")) {
-    const rule = BUILTIN.get(String(name).trim())
-    if (!rule) fail(`unknown builtin rule "${name}"; known: ${BUILTIN_NAMES.join(", ")}`)
+  for (const [i, name] of listOf(raw, "builtin").entries()) {
+    if (typeof name !== "string") fail(`patterns.builtin[${i}] must be a string`)
+    const rule = BUILTIN.get(name.trim())
+    if (!rule) fail(`patterns.builtin[${i}] is not a known builtin rule; known: ${BUILTIN_NAMES.join(", ")}`)
     regex.push({ pattern: rule.pattern, flags: rule.flags, category: rule.category })
   }
 
-  const exclude = new Set(listOf(raw, "exclude").map((x) => String(x ?? "")))
+  const exclude = new Set(listOf(raw, "exclude").map(normalizeExclude))
   return { keywords, regex, exclude }
 }

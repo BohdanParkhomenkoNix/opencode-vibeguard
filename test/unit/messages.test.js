@@ -3,6 +3,7 @@ import assert from "node:assert/strict"
 import { mapStrings, redactRequest, redactStrings, restoreStrings, SKIP_KEYS } from "../../src/messages.js"
 import { BUILTIN_NAMES, buildPatternSet } from "../../src/patterns.js"
 import { findLeak } from "../../src/guard.js"
+import { restoreText } from "../../src/restore.js"
 import { PlaceholderSession } from "../../src/session.js"
 
 const SECRET = "hunter2-very-secret"
@@ -208,7 +209,8 @@ const CASES = {
 for (const [name, [value, make]] of Object.entries(CASES)) {
   test(`escaped secret is masked: ${name}`, () => {
     const { text, body, s } = maskedResult(make(value))
-    assert.ok(!text.includes(value) && !text.includes(value.replaceAll("/", "\\/")), "value left in the tool result")
+    assert.ok(!text.includes(value), "value left in the tool result")
+    if (value.includes("/")) assert.ok(!text.includes(value.replaceAll("/", "\\/")), "escaped value left in the tool result")
     assert.match(text, /__VG_[A-Z_]+_[0-9a-f]{12}__/)
     assert.equal(findLeak(body, escapedRules, s), null)
   })
@@ -242,4 +244,76 @@ test("a value written with \\uXXXX escapes is masked", () => {
 test("a spelling the masker cannot rewrite is blocked by the guard", () => {
   const { body, s } = maskedResult(String.raw`{"password": "p\u00E4ssw\u00F6rd99x"}`, noBackslashRules)
   assert.deepEqual(findLeak(body, noBackslashRules, s), { category: "SECRET_VALUE" })
+})
+
+test("thousands of known values are all replaced, fast", () => {
+  const s = new PlaceholderSession({ prefix: "__VG_", ttlMs: 0, maxMappings: 100000, secret: Buffer.alloc(32, 7) })
+  const values = Array.from({ length: 3000 }, (_, i) => `Fake/${String(i).padStart(5, "0")}/Value+Xy`)
+  for (const v of values) s.getOrCreatePlaceholder(v, "known")
+  const text = values.map((v, i) => `k${i}=${v.replaceAll("/", "\\/")}`).join("\n")
+  const messages = [{ role: "user", content: [{ type: "text", text }] }]
+  const started = performance.now()
+  redactStrings(messages, buildPatternSet({}), s)
+  const elapsed = performance.now() - started
+  const out = messages[0].content[0].text
+  assert.equal(values.filter((v) => out.includes(v.replaceAll("/", "\\/"))).length, 0)
+  // 0.2.3 took about 6.7 s here (one 6000-way alternation); the chunked matcher takes tens of ms.
+  assert.ok(elapsed < 1500, `known-value pass took ${elapsed.toFixed(0)} ms`)
+})
+
+const blobRule = buildPatternSet({ regex: [{ pattern: "[A-Za-z0-9/+]{20,}", category: "blob" }] })
+
+test("a context-free rule with / masks the whole PHP-escaped value, prefix included", () => {
+  const { text, body, s } = maskedResult(String.raw`{"k":"Ab12\/Cd34Ef56Gh78Ij90Kl12Mn"}`, blobRule)
+  assert.ok(!text.includes("Ab12"), `prefix left: ${text}`)
+  assert.match(text, /^\{"k":"__VG_BLOB_[0-9a-f]{12}__"\}$/)
+  assert.equal(findLeak(body, blobRule, s), null)
+})
+
+test("a value seen only in a view, spelled in none of its forms, is not registered", () => {
+  // Uppercase \u00E4: the view decodes it, but no escaped form of the value is spelled that way.
+  const { s, body } = maskedResult(String.raw`{"password": "p\u00E4ssw\u00F6rd99x"}`, noBackslashRules)
+  assert.equal([...s.knownEntries()].length, 0)
+  // Still blocked by the guard, as in 0.2.3.
+  assert.deepEqual(findLeak(body, noBackslashRules, s), { category: "SECRET_VALUE" })
+})
+
+test("one value spelled escaped and plain in one gap gets one placeholder", () => {
+  const { text } = maskedResult(String.raw`{"k":"Ab12\/Cd34Ef56Gh78Ij90Kl12Mn"} and Ab12/Cd34Ef56Gh78Ij90Kl12Mn`, blobRule)
+  const found = text.match(/__VG_BLOB_[0-9a-f]{12}__/g)
+  assert.equal(found.length, 2)
+  assert.equal(new Set(found).size, 1)
+})
+
+test("an existing placeholder next to an escaped value stays intact", () => {
+  const s = session()
+  const prior = s.getOrCreatePlaceholder("Zz99/Yy88Xx77Ww66Vv55Uu44", "blob")
+  const messages = [{ role: "assistant", content: [toolResult(String.raw`${prior} {"k":"Ab12\/Cd34Ef56Gh78Ij90Kl12Mn"}`)] }]
+  redactRequest([[], messages], blobRule, s)
+  const text = messages[0].content[0].result.value[0].text
+  assert.ok(text.startsWith(`${prior} `), text)
+  assert.ok(!text.includes("Ab12"), text)
+})
+
+test("a JSON-escaped PEM that a rule matches whole restores to the exact text it replaced", () => {
+  const body = ["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"]
+  const pem = ["-----BEGIN PRIVATE KEY-----", ...body, "-----END PRIVATE KEY-----", ""].join("\\n")
+  const input = String.raw`Read file /tmp/sa.json, lines 1-1` + "\n" + `1: {"project_id": "demo", "private_key": "${pem}"}`
+  const s = session()
+  const messages = [{ role: "assistant", content: [toolResult(input)] }]
+  redactRequest([[], messages], buildPatternSet({ builtin: ["private_key"] }), s)
+  const masked = messages[0].content[0].result.value[0].text
+  for (const line of body) assert.ok(!masked.includes(line), `key body left: ${masked}`)
+  assert.equal(restoreText(masked, s), input)
+})
+
+test("a value a custom rule matches whole inside JSON escapes restores byte-exact", () => {
+  const rules = buildPatternSet({ regex: [{ pattern: String.raw`(?<=token=)\S+`, category: "token" }] })
+  const input = String.raw`{"cmd": "curl -H token=\"abc123xyz\" host"}`
+  const s = session()
+  const messages = [{ role: "assistant", content: [toolResult(input)] }]
+  redactRequest([[], messages], rules, s)
+  const masked = messages[0].content[0].result.value[0].text
+  assert.ok(!masked.includes("abc123xyz"), masked)
+  assert.equal(restoreText(masked, s), input)
 })

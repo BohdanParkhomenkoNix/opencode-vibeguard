@@ -117,3 +117,11 @@ test("the guard accepts an empty body read from a real Request, and a string bod
   await hooks.session["http.request"]({ kind: "title", request: { body: "{}" } })
   await assert.rejects(hooks.session["http.request"]({ kind: "title", request: { body: `leak ${SECRET}` } }), /plaintext TEST/)
 })
+
+test("a blocked request is emptied whatever shape system and messages have", async (t) => {
+  const hooks = await start(t, '{ "enabled": true, "patterns": { "regex": [{ "pattern": "(" }] } }')
+  const e = { sessionID: "s1", system: `sys ${SECRET}`, messages: { 0: { role: "user", content: SECRET } } }
+  await assert.rejects(hooks.session.context(e), /vibeguard: /)
+  assert.equal(e.system, "")
+  assert.deepEqual(e.messages, [])
+})

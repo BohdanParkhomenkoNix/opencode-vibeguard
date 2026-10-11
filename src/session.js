@@ -29,7 +29,7 @@ export class PlaceholderSession {
     this.maxMappings = Number.isFinite(options?.maxMappings) ? Number(options.maxMappings) : 100000
     // The key comes from key.js: a random per-process key would change every placeholder
     // after an OpenCode restart, while the stored replies still hold the old ones.
-    if (!options?.secret || options.secret.length !== 32) throw new Error("PlaceholderSession needs a 32-byte secret")
+    if (!(options?.secret instanceof Uint8Array) || options.secret.length !== 32) throw new Error("PlaceholderSession needs a 32-byte secret")
     this.secret = Uint8Array.from(options.secret)
 
     /** @type {Map<string,string>} */

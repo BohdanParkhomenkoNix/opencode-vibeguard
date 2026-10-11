@@ -1,5 +1,6 @@
 import { redactText } from "./engine.js"
 import { escapedForms, escapedViews } from "./escapes.js"
+import { knownMatcher, mapGaps } from "./known.js"
 import { restoreText } from "./restore.js"
 import { getPlaceholderRegex } from "./session.js"
 
@@ -55,31 +56,65 @@ export function mapStrings(root, fn, skip = NO_SKIP) {
   return changed
 }
 
-/**
- * Applies fn to the text between placeholders only. A placeholder already in the history is a
- * finished replacement: a rule matching inside it would wrap it in a second placeholder, and
- * restore would then give a tool the inner placeholder instead of the value.
- */
-function mapGaps(text, placeholders, fn) {
-  let out = ""
-  let last = 0
-  for (const m of text.matchAll(placeholders)) {
-    out += fn(text.slice(last, m.index)) + m[0]
-    last = m.index + m[0].length
-  }
-  return out + fn(text.slice(last))
+/** Runs the rules on text and returns what they match, registering nothing. */
+function matchesIn(text, patterns) {
+  const found = []
+  redactText(text, patterns, {
+    getOrCreatePlaceholder(original, category) {
+      found.push({ original, category })
+      return ""
+    },
+  })
+  return found
 }
 
 /**
- * Rules run on the text and, to learn values only, on its views with JSON escapes undone:
- * `password = \"…\"` in a notebook read with `read` only matches once `\"` is undone. The
- * known-value pass then replaces the value in whatever escaped form it takes in the text.
+ * Values the rules find in the views of a gap (JSON escapes undone), registered only when the gap
+ * spells them in a form the replacement can find; a value seen only in a view would take a
+ * max_mappings slot for nothing. A placeholder restores exactly the bytes it replaced: a needle
+ * the rules match whole in the raw gap keeps its own mapping, and only a spelling the raw rules
+ * would split takes the decoded value's placeholder. Returns needle -> placeholder.
+ */
+function learnFromViews(gap, patterns, session) {
+  const kept = []
+  for (const view of escapedViews(gap)) {
+    for (const { original, category } of matchesIn(view, patterns)) {
+      const needles = [original, ...escapedForms(original)].filter((n) => gap.includes(n))
+      if (needles.length > 0) kept.push({ original, category, needles })
+    }
+  }
+  if (kept.length === 0) return new Map()
+
+  const rawHits = new Set(matchesIn(gap, patterns).map((hit) => hit.original))
+  const learned = new Map()
+  const decoded = new Map()
+  const placeholderOf = (original, category) => {
+    if (!decoded.has(original)) decoded.set(original, session.getOrCreatePlaceholder(original, category))
+    return decoded.get(original)
+  }
+  for (const { original, category, needles } of kept) {
+    if (needles.includes(original) && !learned.has(original)) learned.set(original, placeholderOf(original, category))
+  }
+  for (const { original, category, needles } of kept) {
+    for (const n of needles) {
+      if (n === original || learned.has(n)) continue
+      learned.set(n, rawHits.has(n) ? session.getOrCreatePlaceholder(n, category) : placeholderOf(original, category))
+    }
+  }
+  return learned
+}
+
+/**
+ * Values learned from the views are replaced in every escaped form first, then the rules run on
+ * what is left of the raw text. In the other order a rule whose class includes `/` masks only the
+ * part of `abc\/def…` after the backslash, and `abc\/` reaches the provider.
  */
 function rulePass(root, patterns, session) {
   const placeholders = getPlaceholderRegex(session.prefix)
   return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => {
-    for (const view of escapedViews(gap)) redactText(view, patterns, session)
-    return redactText(gap, patterns, session).text
+    const learned = learnFromViews(gap, patterns, session)
+    const masked = learned.size === 0 ? gap : knownMatcher([...learned.keys()]).replaceIn(gap, placeholders, (found) => learned.get(found))
+    return mapGaps(masked, placeholders, (rest) => redactText(rest, patterns, session).text)
   }), SKIP_KEYS)
 }
 
@@ -97,10 +132,9 @@ function knownPass(root, session) {
     for (const form of escapedForms(original)) if (!originalOf.has(form)) originalOf.set(form, original)
   }
   if (originalOf.size === 0) return 0
-  const needles = [...originalOf.keys()].sort((a, b) => b.length - a.length)
-  const known = new RegExp(needles.map((o) => o.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "g")
+  const known = knownMatcher([...originalOf.keys()])
   const placeholders = getPlaceholderRegex(session.prefix)
-  return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => gap.replace(known, (found) => session.lookupReverse(originalOf.get(found)))), SKIP_KEYS)
+  return mapStrings(root, (text) => known.replaceIn(text, placeholders, (found) => session.lookupReverse(originalOf.get(found))), SKIP_KEYS)
 }
 
 /** Redacts one tree: rules first, then the values they learned. Returns the number of strings changed. */

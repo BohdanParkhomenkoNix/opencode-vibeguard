@@ -4,7 +4,7 @@
 
 ## Rulings
 
-- R1. Плагин в `plugins` задаётся директорией (с `package.json`: `main`/`exports`), не файлом. Путь к файлу даёт `WARN configured plugin path must be a directory target=…/index.js`, плагин не грузится. Работают три формы: абсолютный путь директории, `file:///…/dir`, `file:///…/dir/`. Поэтому `PLUGIN_ENTRY` в `test/helpers/opencode.js` — `file://` URL корня репозитория (`file:///…/opencode-vibeguard`), а не `src/index.js`; точку входа выбирает `package.json` (`exports: ./src/index.js`).
+- R1. Плагин в `plugins` задаётся директорией (с `package.json`: `main`/`exports`), не файлом. Путь к файлу даёт `WARN configured plugin path must be a directory target=…/index.js`, плагин не грузится. Работают три формы: абсолютный путь директории, `file:///…/dir`, `file:///…/dir/`. Поэтому `PLUGIN_ENTRY` в `test/helpers/opencode.js` — `file://` URL корня репозитория (`file:///…/opencode-vibeguard`), а не `src/index.js`; точку входа выбирает `package.json` (`exports: ./src/index.js`). Поправка: для локальной директории точку входа выбирает не `exports` — см. R1a.
 - R1a (поправка, найдена в Задаче 11). Для локальной директории V2 резолвит `<dir>/server`, затем `<dir>/index` и игнорирует `main`/`exports` из `package.json` (по `package.json` резолвятся только пакеты по имени). Поэтому в корне репозитория лежит `index.js`, реэкспортирующий `src/index.js`; без него плагин молча не грузится.
 - R2. F2 «да» и F3 «да»: оба пути блокировки работают, стоп-условие плана не сработало. Страж в `http.request` перекрывает все запросы, включая `title`.
 - R3. Изоляция через `HOME` + `XDG_CONFIG_HOME/DATA/CACHE/STATE` достаточна; других переменных не нужно. Сервис OC и реальный `~/.config/opencode` не затрагиваются (`--standalone`).

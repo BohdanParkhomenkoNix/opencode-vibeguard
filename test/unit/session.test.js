@@ -52,3 +52,7 @@ test("ttl 0 keeps mappings forever", () => {
   s.cleanup(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000)
   assert.equal(s.lookup(ph), "hunter2")
 })
+
+test("a 32-character string is not a secret", () => {
+  assert.throws(() => make("x".repeat(32)), /needs a 32-byte secret/)
+})

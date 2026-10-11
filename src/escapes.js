@@ -31,8 +31,9 @@ const slashEscape = (s) => s.replaceAll("/", "\\/")
 const asciiEscape = (s) => s.replace(/[\u0080-\uFFFF]/g, (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`)
 
 /**
- * How a value can be spelled inside escaped text: JSON-escaped once to three times, each level
- * also with `\/` (PHP) and `\uXXXX` for non-ASCII (Python ensure_ascii, Jupyter).
+ * How a value can be spelled inside escaped text: JSON-escaped once to three times; each level
+ * also gets a `\/` (PHP) variant and a `\uXXXX`-for-non-ASCII (Python ensure_ascii, Jupyter)
+ * variant, applied to that level separately, not chained across levels.
  */
 export function escapedForms(value) {
   const forms = new Set()

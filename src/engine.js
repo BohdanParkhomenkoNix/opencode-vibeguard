@@ -48,14 +48,13 @@ const HOST_LABELS = /^(?:[a-z0-9._%+-]+@)?[a-z0-9-]+(?:\.[a-z0-9-]+)*$/
 /**
  * An exact entry, or an address/host under that domain: `example.com` covers `a@example.com`,
  * `a@mail.example.com` and `api.example.com`. A credential such as `user:pass@localhost` is not
- * address-shaped, so the domain rule leaves it masked.
+ * address-shaped, so the domain rule leaves it masked. Entries come trimmed and lowercased from
+ * buildPatternSet.
  */
 function isExcluded(original, exclude) {
   if (exclude.size === 0) return false
   const value = original.toLowerCase()
-  for (const entry of exclude) {
-    const x = entry.toLowerCase()
-    if (!x) continue
+  for (const x of exclude) {
     if (value === x) return true
     if (value.endsWith(`@${x}`) && EMAIL_LOCAL_PART.test(value.slice(0, -(x.length + 1)))) return true
     if (value.endsWith(`.${x}`) && HOST_LABELS.test(value.slice(0, -(x.length + 1)))) return true
