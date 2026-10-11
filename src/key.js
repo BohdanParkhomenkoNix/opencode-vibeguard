@@ -9,12 +9,49 @@ export function defaultKeyFile() {
   return path.join(os.homedir(), ".config", "opencode", "vibeguard.key")
 }
 
+const TEMP_SUFFIX = /^(\d+)\.[0-9a-f]{8}\.tmp$/
+
+function isAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: alive, owned by someone else.
+    return error.code !== "ESRCH"
+  }
+}
+
+/** A process killed between write and unlink leaves its temp file, holding key bytes, behind. */
+function removeOrphanTemps(file, fs) {
+  const dir = path.dirname(file)
+  const prefix = `${path.basename(file)}.`
+  let names
+  try {
+    names = fs.readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix)) continue
+    const m = name.slice(prefix.length).match(TEMP_SUFFIX)
+    if (!m) continue
+    const pid = Number(m[1])
+    if (pid === process.pid || isAlive(pid)) continue
+    try {
+      fs.unlinkSync(path.join(dir, name))
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
 /**
  * Written aside and linked into place, so no process ever reads a half-written key.
  * If another process links its key first, that key wins.
  */
 function createKey(file, fs) {
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  removeOrphanTemps(file, fs)
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`
   try {
     fs.writeFileSync(tmp, randomBytes(KEY_BYTES), { mode: 0o600, flag: "wx" })

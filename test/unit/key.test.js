@@ -1,5 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { spawnSync } from "node:child_process"
 import * as fs from "node:fs"
 import { chmodSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
@@ -91,4 +92,15 @@ test("a key that cannot be tightened is an error without its bytes", (t) => {
     () => loadKey(file, failing),
     (error) => /accessible by others and chmod failed: EPERM/.test(error.message) && !error.message.includes("AAAAAAAA"),
   )
+})
+
+test("a temp key file left by a dead process is removed; others stay", (t) => {
+  const dir = tmpdir(t)
+  const deadPid = spawnSync(process.execPath, ["-e", ""]).pid
+  const dead = `vibeguard.key.${deadPid}.0badc0de.tmp`
+  const live = `vibeguard.key.${process.ppid}.0badc0de.tmp`
+  const unrelated = ["vibeguard.key.bak", `other.key.${deadPid}.0badc0de.tmp`]
+  for (const name of [dead, live, ...unrelated]) writeFileSync(path.join(dir, name), "x", { mode: 0o600 })
+  loadKey(path.join(dir, "vibeguard.key"))
+  assert.deepEqual(readdirSync(dir).sort(), [live, ...unrelated, "vibeguard.key"].sort())
 })
