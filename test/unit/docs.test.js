@@ -30,8 +30,8 @@ test("README documents exclude by domain, ttl 0s and key permissions", () => {
   assert.match(readme, /readable by others[^\n]*0600/)
 })
 
-test("package version is 0.2.4", () => {
-  assert.equal(JSON.parse(read("package.json")).version, "0.2.4")
+test("package version is 0.2.5", () => {
+  assert.equal(JSON.parse(read("package.json")).version, "0.2.5")
 })
 
 test("README limits: escaped secrets are masked; domain exclude is address-shaped only", () => {
@@ -52,6 +52,7 @@ test("README: exclude normalization, broad entries, local logs", () => {
   assert.match(readme, /leading `@` or `\*\.` is dropped/)
   assert.match(readme, /broad entry[^\n]*exempts every address and host/)
   assert.match(readme, /local logs[^\n]*plaintext/)
+  assert.match(readme, /One leading `\*\.` is the only wildcard[^\n]*can never match and is a config error/)
 })
 
 test("no orphan screenshot in the repo", () => {

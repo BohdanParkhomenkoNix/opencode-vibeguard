@@ -41,6 +41,10 @@ test("find returns a needle from a later chunk, or null", () => {
 test("regex metacharacters are literal; empty input is harmless", () => {
   assert.equal(knownMatcher(["a.b"]).find("axb"), null)
   assert.equal(knownMatcher(["a.b"]).find("a.b"), "a.b")
+  for (const [needle, lookalike] of [["a*b", "aab"], ["a+b", "aab"], ["f(x)", "fx"], ["k[0]", "k0"]]) {
+    assert.equal(knownMatcher([needle]).find(lookalike), null, needle)
+    assert.equal(knownMatcher([needle]).find(`x ${needle} y`), needle, needle)
+  }
   const empty = knownMatcher(["", ""])
   assert.equal(empty.size, 0)
   assert.equal(empty.find("anything"), null)

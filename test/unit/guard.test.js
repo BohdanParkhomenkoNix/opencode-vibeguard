@@ -105,6 +105,13 @@ test("a known value written escaped inside non-JSON text is caught", () => {
   assert.deepEqual(findLeak(body('1: {"cmd": "echo pa\\"ss-word-42"}  trailing'), patterns, s), { category: "TEST" })
 })
 
+test("an empty known original matches nothing", () => {
+  const s = session()
+  s.getOrCreatePlaceholder("", "test")
+  assert.equal([...s.knownEntries()].length, 1)
+  assert.equal(findLeak(body("anything at all"), patterns, s), null)
+})
+
 const manyKnown = (count = 3000) => {
   const s = new PlaceholderSession({ prefix: "__VG_", ttlMs: 0, maxMappings: 100000, secret: Buffer.alloc(32, 7) })
   for (let i = 0; i < count; i++) s.getOrCreatePlaceholder(`Fake/${String(i).padStart(5, "0")}/Value+Xy`, "known")

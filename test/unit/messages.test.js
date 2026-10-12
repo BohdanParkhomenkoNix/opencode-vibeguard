@@ -257,6 +257,9 @@ test("thousands of known values are all replaced, fast", () => {
   const elapsed = performance.now() - started
   const out = messages[0].content[0].text
   assert.equal(values.filter((v) => out.includes(v.replaceAll("/", "\\/"))).length, 0)
+  const placeholders = out.match(/__VG_KNOWN_[0-9a-f]{12}__/g)
+  assert.equal(placeholders.length, values.length)
+  assert.equal(new Set(placeholders).size, values.length, "each escaped value must get its own placeholder")
   // 0.2.3 took about 6.7 s here (one 6000-way alternation); the chunked matcher takes tens of ms.
   assert.ok(elapsed < 1500, `known-value pass took ${elapsed.toFixed(0)} ms`)
 })

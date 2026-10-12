@@ -110,7 +110,8 @@ test("a ttl error does not echo the value", async (t) => {
 test("~user/ in key_file is an error", async (t) => {
   const { project, write } = setup(t)
   write(path.join(project, "vibeguard.config.json"), { enabled: true, key_file: "~someone/vibeguard.key" })
-  await assert.rejects(loadConfig(project), /only ~\/ is supported in key_file/)
+  const file = path.join(project, "vibeguard.config.json")
+  await assert.rejects(loadConfig(project), (e) => e.message === `config ${file}: only ~/ is supported in key_file`)
 })
 
 test("~user/ in OPENCODE_VIBEGUARD_CONFIG is an error", async (t) => {
