@@ -120,6 +120,8 @@ function normalizeExclude(x, i) {
   if (entry.startsWith("*.")) entry = entry.slice(2)
   if (entry.startsWith("@")) entry = entry.slice(1)
   if (!entry || /\s/.test(entry)) fail(`patterns.exclude[${i}] is empty or contains spaces`)
+  // A `*` label after the one leading `*.` is dropped is a wildcard in a position that never matches.
+  if (/(^|[.@])\*($|\.)/.test(entry)) fail(`patterns.exclude[${i}] has a * where it can never match; only one leading *. is allowed`)
   return entry
 }
 

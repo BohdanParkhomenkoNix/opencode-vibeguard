@@ -111,6 +111,17 @@ test("the guard blocks when the event carries no readable request", async (t) =>
   }
 })
 
+test("a blocked request leaves a missing, null or undefined system and messages as they are", async (t) => {
+  const hooks = await start(t, '{ "enabled": true, "patterns": { "regex": [{ "pattern": "(" }] } }')
+  const e = { sessionID: "s1", system: null, messages: undefined }
+  await assert.rejects(hooks.session.context(e), /vibeguard: /)
+  assert.equal(e.system, null)
+  assert.equal(e.messages, undefined)
+  const bare = { sessionID: "s1" }
+  await assert.rejects(hooks.session.context(bare), /vibeguard: /)
+  assert.deepEqual(Object.keys(bare), ["sessionID"])
+})
+
 test("the guard accepts an empty body read from a real Request, and a string body", async (t) => {
   const hooks = await start(t, ON)
   await hooks.session["http.request"]({ kind: "title", request: new Request("http://x", { method: "POST", body: "" }) })

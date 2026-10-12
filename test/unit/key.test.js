@@ -129,6 +129,12 @@ test("a stat failure is a key file error", (t) => {
   assert.throws(() => loadKey(file, failing), /cannot stat key file .*: EACCES/)
 })
 
+test("a null error thrown by the read reads 'unknown error', not a TypeError", (t) => {
+  const file = path.join(tmpdir(t), "vibeguard.key")
+  const failing = { ...fs, readFileSync() { throw null } }
+  assert.throws(() => loadKey(file, failing), (e) => /^cannot read key file .*: unknown error$/.test(e.message))
+})
+
 test("an error without a code reads 'unknown error', not 'undefined'", (t) => {
   const file = path.join(tmpdir(t), "vibeguard.key")
   writeFileSync(file, Buffer.alloc(KEY_BYTES, 1))

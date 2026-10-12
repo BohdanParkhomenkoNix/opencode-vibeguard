@@ -141,6 +141,16 @@ test("an empty, spaced or non-string exclude entry is an error naming its positi
   assert.throws(() => buildPatternSet({ exclude: [null] }), /patterns\.exclude\[0\] must be a string/)
 })
 
+test("an exclude entry with a * label that can never match is an error naming its position only", () => {
+  for (const entry of ["@*.x.com", "*.*.x.com", "a.*.x.com", "*"]) {
+    assert.throws(() => buildPatternSet({ exclude: ["ok.com", entry] }), (e) => e.message === "patterns.exclude[1] has a * where it can never match; only one leading *. is allowed", entry)
+  }
+})
+
+test("a * inside a label, or one leading *., is still accepted", () => {
+  assert.deepEqual([...buildPatternSet({ exclude: ["*.@x.com", "*.y.com", "a*b"] }).exclude], ["x.com", "y.com", "a*b"])
+})
+
 test("a non-string builtin entry is an error naming its position", () => {
   assert.throws(() => buildPatternSet({ builtin: ["email", { name: "jwt" }] }), (e) => /patterns\.builtin\[1\] must be a string/.test(e.message) && !e.message.includes("[object Object]"))
 })

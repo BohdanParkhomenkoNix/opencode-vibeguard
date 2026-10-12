@@ -107,7 +107,7 @@ export function loadKey(file = defaultKeyFile(), fs = nodeFs) {
   try {
     key = fs.readFileSync(file)
   } catch (error) {
-    if (error.code !== "ENOENT") throw new Error(`cannot read key file ${file}: ${codeOf(error)}`)
+    if (error?.code !== "ENOENT") throw new Error(`cannot read key file ${file}: ${codeOf(error)}`)
     createKey(file, fs)
     key = fs.readFileSync(file)
   }
