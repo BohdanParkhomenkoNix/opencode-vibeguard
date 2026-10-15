@@ -1,6 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { findLeak } from "../../src/guard.js"
+import { redactRequest } from "../../src/messages.js"
+import { OriginTracker } from "../../src/origin.js"
 import { buildPatternSet } from "../../src/patterns.js"
 import { PlaceholderSession } from "../../src/session.js"
 
@@ -144,4 +146,69 @@ test("the known-value check scales to thousands of values and strings", () => {
 test("a known value in the matcher's last chunk is still caught", () => {
   const s = manyKnown()
   assert.deepEqual(findLeak(body("x Fake/02999/Value+Xy y"), buildPatternSet({}), s), { category: "KNOWN" })
+})
+
+const trackerFor = (s) => new OriginTracker({ hashOf: (v) => s.hashOf(v), ttlMs: 0 })
+
+test("a model-made value passes in its session and is reported in another", () => {
+  const s = session()
+  const tracker = trackerFor(s)
+  tracker.markModelMade("s1", "bot@madeup.io")
+  const b = toolCallBody(JSON.stringify({ path: "a.txt", content: "bot@madeup.io" }))
+  assert.equal(findLeak(b, patterns, s, { sessionId: "s1", tracker }), null)
+  assert.deepEqual(findLeak(b, patterns, s, { sessionId: "s2", tracker }), { category: "EMAIL" })
+  assert.deepEqual(findLeak(b, patterns, s), { category: "EMAIL" })
+})
+
+test("a model-made value that is a known secret elsewhere passes in its session", () => {
+  const s = session()
+  const tracker = trackerFor(s)
+  tracker.markModelMade("s1", "Fake/Known+Value-1")
+  s.getOrCreatePlaceholder("Fake/Known+Value-1", "known")
+  const b = body("x Fake/Known+Value-1 y")
+  assert.equal(findLeak(b, buildPatternSet({}), s, { sessionId: "s1", tracker }), null)
+  assert.deepEqual(findLeak(b, buildPatternSet({}), s, { sessionId: "s2", tracker }), { category: "KNOWN" })
+})
+
+const FIXTURES = [
+  "import pytest\n\n@pytest.fixture\ndef t():\n    pass\n",
+  "@app.route('/x')\n@login.required\ndef v(): pass\n",
+  '{"password": "Fake7pass9word12", "note": "a\\nb"}',
+  "contact: bot@madeup.io\nsupport@acme.io\n",
+  "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----\n",
+  `token = "sk-proj-${"A".repeat(48)}"`,
+]
+
+/** The OpenAI-compatible body OpenCode builds: arguments is JSON text, tool content a string. */
+const serialize = (messages) => JSON.stringify({
+  messages: messages.map((m) => {
+    const text = m.content.filter((p) => p.type === "text").map((p) => p.text).join("")
+    const results = m.content.filter((p) => p.type === "tool-result").map((p) => p.result.value).join("")
+    const calls = m.content.filter((p) => p.type === "tool-call")
+      .map((p) => ({ id: p.id, type: "function", function: { name: p.name, arguments: JSON.stringify(p.input) } }))
+    return { role: m.role, content: text || results, ...(calls.length > 0 && { tool_calls: calls }) }
+  }),
+})
+
+test("what the redaction leaves always passes the guard once serialized as OpenCode does", () => {
+  const rules = buildPatternSet({
+    builtin: ["email", "private_key", "openai_key"],
+    regex: [{ pattern: String.raw`(?<=password["']?\s*[:=]\s*["']?)[A-Za-z0-9]{12,}`, category: "secret_value" }],
+  })
+  for (const [i, content] of FIXTURES.entries()) {
+    for (const withOrigin of [false, true]) {
+      const s = session()
+      const origin = withOrigin ? { sessionId: "s1", tracker: trackerFor(s) } : undefined
+      const messages = [
+        { role: "user", content: [{ type: "text", text: "write the file" }] },
+        { role: "assistant", content: [{ type: "tool-call", id: "c1", name: "write", input: { path: "f", content } }] },
+        { role: "tool", content: [{ type: "tool-result", id: "c1", name: "write", result: { type: "text", value: "ok" } }] },
+        { role: "assistant", content: [{ type: "tool-call", id: "c2", name: "read", input: { path: "f" } }] },
+        { role: "tool", content: [{ type: "tool-result", id: "c2", name: "read", result: { type: "text", value: content } }] },
+        { role: "user", content: [{ type: "text", text: `and this: ${content}` }] },
+      ]
+      redactRequest([[], messages], rules, s, origin)
+      assert.equal(findLeak(serialize(messages), rules, s, origin), null, `fixture ${i}, origin ${withOrigin}`)
+    }
+  }
 })
