@@ -161,11 +161,29 @@ export function redactStrings(root, patterns, session) {
   return rulePass(root, patterns, session) + knownPass(root, session)
 }
 
+const ALNUM = /[A-Za-z0-9]/
+const VALUE_CHAR = /[A-Za-z0-9_%+@-]/
+
+/**
+ * Whether text[offset, offset + length) stands as a whole token: the character before and the
+ * one after are not part of a value. A `.` is part of a value only next to a letter or digit,
+ * so `10.20.0.50` does not hold `10.20.0.5`, while a sentence-end `.` does not extend a value.
+ */
+function isWholeToken(text, offset, length) {
+  const end = offset + length
+  const before = text[offset - 1]
+  const after = text[end]
+  if (before !== undefined && (VALUE_CHAR.test(before) || (before === "." && ALNUM.test(text[offset - 2] ?? "")))) return false
+  if (after !== undefined && (VALUE_CHAR.test(after) || (after === "." && ALNUM.test(text[end + 1] ?? "")))) return false
+  return true
+}
+
 /**
  * Writes the class of every value in root to the origin journal of origin.sessionId: "model" for
  * the model's own output, "input" for anything sent to it. A value is a rule match, in the raw text
  * or in an escaped view, or a value of the placeholder map in any escaped form (`known`, built once
- * per request). Placeholders are not scanned. A value the session's chain already holds keeps its
+ * per request; in model output a known value counts only as a whole token, as the model never wrote
+ * a substring of a longer value as a value). Placeholders are not scanned. A value the session's chain already holds keeps its
  * class. Wrap a tool input as `{ input }` so every key of it is content.
  * @param {"model" | "input"} kind
  * @param {{ sessionId: string, tracker: import("./origin.js").OriginTracker }} origin
@@ -180,8 +198,8 @@ export function classify(root, kind, patterns, session, origin, known = knownInd
       for (const view of [gap, ...escapedViews(gap)]) {
         for (const { original } of matchesIn(view, patterns)) mark(original)
       }
-      known.matcher.replaceIn(gap, placeholders, (found) => {
-        mark(known.originalOf.get(found))
+      known.matcher.replaceIn(gap, placeholders, (found, offset, text) => {
+        if (kind === "input" || isWholeToken(text, offset, found.length)) mark(known.originalOf.get(found))
         return found
       })
       return gap

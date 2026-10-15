@@ -157,11 +157,11 @@ test("a bare value the map learned from a context rule elsewhere is model-made w
 
 test("a value that arrived only escaped is a secret when the model later writes it plainly", () => {
   const { session, tracker, origin } = fresh()
-  const escaped = String.raw`{"owner": "bot@madeup.io"}`
-  const messages = [readResult(escaped), assistantText(`mail ${MADE}`)]
-  redactRequest([[], messages], patterns, session, origin())
-  assert.equal(tracker.classOf("s1", MADE), "input")
-  assert.match(messages[1].content[0].text, PH)
+  const escaped = String.raw`{"note": "password = \"Fake7pass9word12\""}`
+  const messages = [readResult(escaped), assistantText(`password = "Fake7pass9word12"`)]
+  redactRequest([[], messages], secretValue, session, origin())
+  assert.equal(tracker.classOf("s1", "Fake7pass9word12"), "input")
+  assert.ok(!JSON.stringify(messages).includes("Fake7pass9word12"))
 })
 
 test("a subagent's model writing a value its parent saw as input gets it masked", () => {
@@ -175,13 +175,46 @@ test("a subagent's model writing a value its parent saw as input gets it masked"
 })
 
 test("a model-made value that contains a shorter secret is masked the way the guard checks it", () => {
-  const { session, origin } = fresh()
+  const { session, tracker, origin } = fresh()
   const inner = "inner.secret@corp.io"
-  redactRequest([[], [readResult(inner)]], patterns, session, origin("A"))
   const outer = `x${inner}`
-  const b = [assistantText(`mail ${outer}`), readResult(`1: ${outer}`)]
+  session.getOrCreatePlaceholder(outer, "email")
+  const b = [readResult(inner), assistantText(`mail ${outer}`), readResult(`1: ${outer}`)]
   redactRequest([[], b], patterns, session, origin("B"))
+  assert.equal(tracker.classOf("B", inner), "input")
+  assert.equal(tracker.classOf("B", outer), "model")
+  assert.ok(!JSON.stringify(b).includes(inner))
   assert.equal(findLeak(body(b), patterns, session, origin("B")), null)
+})
+
+test("a value the model only extended is not model-made: an email suffix", () => {
+  const { session, tracker, origin } = fresh()
+  redactRequest([[], [readResult("1: owner bob@corp.io")]], patterns, session, origin("A"))
+  const b = [assistantText("ping jimbob@corp.io"), readResult("1: owner bob@corp.io")]
+  redactRequest([[], b], patterns, session, origin("B"))
+  assert.equal(tracker.classOf("B", "bob@corp.io"), "input")
+  assert.match(b[1].content[0].result.value, PH)
+  assert.equal(findLeak(body(b), patterns, session, origin("B")), null)
+})
+
+test("a value the model only extended is not model-made: an ipv4 prefix", () => {
+  const { session, tracker, origin } = fresh()
+  const ipv4 = buildPatternSet({ builtin: ["ipv4"] })
+  redactRequest([[], [readResult("db_host = 10.20.0.5")]], ipv4, session, origin("A"))
+  const b = [assistantText("Example: set host to 10.20.0.50 in staging"), readResult("db_host = 10.20.0.5")]
+  redactRequest([[], b], ipv4, session, origin("B"))
+  assert.equal(tracker.classOf("B", "10.20.0.5"), "input")
+  assert.match(b[1].content[0].result.value, /__VG_IPV4_[0-9a-f]{12}__/)
+  assert.equal(findLeak(body(b), ipv4, session, origin("B")), null)
+})
+
+test("a known value at the end of a sentence is still whole, so model-made", () => {
+  const { session, tracker, origin } = fresh()
+  redactRequest([[], [readResult("1: owner bob@corp.io")]], patterns, session, origin("A"))
+  const b = [assistantText("mail bob@corp.io."), readResult("1: owner bob@corp.io")]
+  redactRequest([[], b], patterns, session, origin("B"))
+  assert.equal(tracker.classOf("B", "bob@corp.io"), "model")
+  assert.equal(b[1].content[0].result.value, "1: owner bob@corp.io")
 })
 
 test("classification over 100000 known mappings stays under 3000 ms", () => {
