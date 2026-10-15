@@ -1,7 +1,7 @@
 import { loadConfig } from "./config.js"
 import { findLeak } from "./guard.js"
 import { loadKey } from "./key.js"
-import { learnModelMade, redactRequest, restoreStrings } from "./messages.js"
+import { classify, redactRequest, restoreStrings } from "./messages.js"
 import { OriginTracker } from "./origin.js"
 import { buildPatternSet } from "./patterns.js"
 import { restoreText } from "./restore.js"
@@ -148,7 +148,7 @@ async function setup(ctx) {
     ready()
     const origin = originOf(event.sessionID)
     // Read before restore: the input is still exactly what the model wrote.
-    if (origin && LEARN_TOOLS.has(event.tool)) learnModelMade({ input: event.input }, state.patterns, state.session, origin)
+    if (origin && LEARN_TOOLS.has(event.tool)) classify({ input: event.input }, "model", state.patterns, state.session, origin)
     if (!NO_RESTORE_TOOLS.has(event.tool)) {
       if (typeof event.input === "string") event.input = restoreText(event.input, state.session)
       else restoreStrings(event.input, state.session)

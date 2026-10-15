@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { learnModelMade, redactRequest } from "../../src/messages.js"
+import { findLeak } from "../../src/guard.js"
+import { classify, redactRequest } from "../../src/messages.js"
 import { OriginTracker } from "../../src/origin.js"
 import { buildPatternSet } from "../../src/patterns.js"
 import { PlaceholderSession } from "../../src/session.js"
@@ -56,7 +57,7 @@ test("a model-made value is masked in another session", () => {
 
 test("a value in a tool input is model-made before any request carries it", () => {
   const { session, tracker, origin } = fresh()
-  learnModelMade({ input: { path: "a.py", content: `x = "${MADE}"` } }, patterns, session, origin())
+  classify({ input: { path: "a.py", content: `x = "${MADE}"` } }, "model", patterns, session, origin())
   assert.equal(tracker.isModelMade("s1", MADE), true)
   const messages = [readResult(`1: x = "${MADE}"`)]
   redactRequest([[], messages], patterns, session, origin())
@@ -86,13 +87,13 @@ test("without a session id nothing is model-made, as in 0.2.6", () => {
   assert.ok(!JSON.stringify(messages).includes(MADE))
 })
 
-test("a known secret the model outputs stays a secret", () => {
+test("a value known from another session is model-made here when the model writes it first", () => {
   const { session, tracker, origin } = fresh()
   session.getOrCreatePlaceholder(MADE, "email")
   const messages = [assistantText(`mail ${MADE}`)]
   redactRequest([[], messages], patterns, session, origin())
-  assert.match(messages[0].content[0].text, PH)
-  assert.equal(tracker.isModelMade("s1", MADE), false)
+  assert.equal(messages[0].content[0].text, `mail ${MADE}`)
+  assert.equal(tracker.isModelMade("s1", MADE), true)
 })
 
 test("a model-made value that became a secret in another session is not replaced here", () => {
@@ -109,4 +110,86 @@ test("a root of plain strings is still redacted", () => {
   const system = [`git user ${MADE}`]
   redactRequest([system, []], patterns, session, origin())
   assert.match(system[0], PH)
+})
+
+const body = (messages) => JSON.stringify({ messages })
+
+test("a secret in session A that the model writes first in session B is masked in A only", () => {
+  const { session, tracker, origin } = fresh()
+  const a = [readResult(`1: owner ${MADE}`)]
+  redactRequest([[], a], patterns, session, origin("A"))
+  assert.match(a[0].content[0].result.value, PH)
+  const b = [user("make notes"), writeCall(`contact ${MADE}`), readResult(`1: contact ${MADE}`)]
+  redactRequest([[], b], patterns, session, origin("B"))
+  assert.equal(b[1].content[0].input.content, `contact ${MADE}`)
+  assert.equal(b[2].content[0].result.value, `1: contact ${MADE}`)
+  assert.equal(tracker.isModelMade("B", MADE), true)
+  assert.equal(findLeak(body(b), patterns, session, origin("B")), null)
+  assert.equal(findLeak(body(b), patterns, session, origin("A"))?.category, "EMAIL")
+  const again = [readResult(`1: owner ${MADE}`)]
+  redactRequest([[], again], patterns, session, origin("A"))
+  assert.match(again[0].content[0].result.value, PH)
+})
+
+test("a value that reaches session B as input first is a secret in B, whatever another session says", () => {
+  const { session, origin } = fresh()
+  redactRequest([[], [writeCall(MADE)]], patterns, session, origin("A"))
+  const b = [readResult(`1: ${MADE}`), assistantText(`saw ${MADE}`)]
+  redactRequest([[], b], patterns, session, origin("B"))
+  assert.match(b[0].content[0].result.value, PH)
+  assert.match(b[1].content[0].text, PH)
+  assert.ok(!JSON.stringify(b).includes(MADE))
+})
+
+test("a bare value the map learned from a context rule elsewhere is model-made where the model writes it first", () => {
+  const { session, tracker, origin } = fresh()
+  const SV = /__VG_SECRET_VALUE_[0-9a-f]{12}__/
+  redactRequest([[], [readResult(`password = "Fake7pass9word12"`)]], secretValue, session, origin("A"))
+  const b = [assistantText("use Fake7pass9word12 as the sample"), readResult("1: Fake7pass9word12")]
+  redactRequest([[], b], secretValue, session, origin("B"))
+  assert.equal(b[0].content[0].text, "use Fake7pass9word12 as the sample")
+  assert.equal(b[1].content[0].result.value, "1: Fake7pass9word12")
+  assert.equal(tracker.isModelMade("B", "Fake7pass9word12"), true)
+  const c = [readResult("1: Fake7pass9word12")]
+  redactRequest([[], c], secretValue, session, origin("C"))
+  assert.match(c[0].content[0].result.value, SV)
+})
+
+test("a value that arrived only escaped is a secret when the model later writes it plainly", () => {
+  const { session, tracker, origin } = fresh()
+  const escaped = String.raw`{"owner": "bot@madeup.io"}`
+  const messages = [readResult(escaped), assistantText(`mail ${MADE}`)]
+  redactRequest([[], messages], patterns, session, origin())
+  assert.equal(tracker.classOf("s1", MADE), "input")
+  assert.match(messages[1].content[0].text, PH)
+})
+
+test("a subagent's model writing a value its parent saw as input gets it masked", () => {
+  const { session, tracker, origin } = fresh()
+  redactRequest([[], [readResult(`1: ${MADE}`)]], patterns, session, origin("parent"))
+  tracker.addHandoff("p", "parent")
+  tracker.linkSubagent("child", "You are a subagent spawned by another session.\np")
+  const child = [assistantText(`mail ${MADE}`)]
+  redactRequest([[], child], patterns, session, origin("child"))
+  assert.match(child[0].content[0].text, PH)
+})
+
+test("a model-made value that contains a shorter secret is masked the way the guard checks it", () => {
+  const { session, origin } = fresh()
+  const inner = "inner.secret@corp.io"
+  redactRequest([[], [readResult(inner)]], patterns, session, origin("A"))
+  const outer = `x${inner}`
+  const b = [assistantText(`mail ${outer}`), readResult(`1: ${outer}`)]
+  redactRequest([[], b], patterns, session, origin("B"))
+  assert.equal(findLeak(body(b), patterns, session, origin("B")), null)
+})
+
+test("classification over 100000 known mappings stays under 3000 ms", () => {
+  const { session, origin } = fresh()
+  session.maxMappings = 200000
+  for (let i = 0; i < 100000; i++) session.getOrCreatePlaceholder(`user${i}@bulk.io`, "email")
+  const messages = [user("hello"), assistantText(`mail ${MADE}`), readResult("1: nothing here")]
+  const started = Date.now()
+  redactRequest([[], messages], patterns, session, origin())
+  assert.ok(Date.now() - started < 3000, `took ${Date.now() - started} ms`)
 })
