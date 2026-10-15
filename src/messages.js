@@ -136,9 +136,16 @@ function knownNeedles(session, skipEntry = NEVER) {
   return originalOf
 }
 
+const indexes = new WeakMap()
+
+/** The index of every known value; reused while the session's `version` stays the same. */
 function knownIndex(session) {
+  const cached = indexes.get(session)
+  if (cached && typeof session.version === "number" && cached.version === session.version) return cached
   const originalOf = knownNeedles(session)
-  return { originalOf, matcher: knownMatcher([...originalOf.keys()]) }
+  const index = { version: session.version, originalOf, matcher: knownMatcher([...originalOf.keys()]) }
+  indexes.set(session, index)
+  return index
 }
 
 /**

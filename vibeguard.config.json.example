@@ -8,6 +8,6 @@
     "keywords": [],
     "regex": [],
     "builtin": ["openai_key", "anthropic_key", "github_token", "aws_access_key", "google_api_key", "private_key", "jwt", "email"],
-    "exclude": ["example.com", "localhost", "127.0.0.1", "0.0.0.0", "noreply@anthropic.com"]
+    "exclude": ["example.com", "localhost", "127.0.0.1", "0.0.0.0", "noreply@anthropic.com", "git@github.com", "git@gitlab.com", "git@bitbucket.org"]
   }
 }

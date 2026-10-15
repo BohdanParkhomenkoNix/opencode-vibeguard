@@ -24,6 +24,7 @@ export function placeholderHash(placeholder) {
  *   means mappings never expire by age; maxMappings evicts the least recently used
  * - `dirty` is set by any change so the caller knows the store needs saving; a renewal sets it
  *   only when it moves last use forward by RENEW_STEP_MS
+ * - `version` grows whenever a mapping is added or removed, so an index of the values can be reused
  */
 export class PlaceholderSession {
   /**
@@ -46,6 +47,7 @@ export class PlaceholderSession {
     /** @type {Map<string,number>} placeholder -> last use */
     this.used = new Map()
     this.dirty = false
+    this.version = 0
   }
 
   drop(placeholder) {
@@ -54,6 +56,7 @@ export class PlaceholderSession {
     this.used.delete(placeholder)
     if (original !== undefined) this.reverse.delete(original)
     this.dirty = true
+    this.version++
   }
 
   cleanup(now = Date.now()) {
@@ -114,6 +117,7 @@ export class PlaceholderSession {
     this.reverse.set(original, placeholder)
     this.used.set(placeholder, now)
     this.dirty = true
+    this.version++
   }
 
   /**
@@ -174,6 +178,7 @@ export class PlaceholderSession {
         this.forward.set(placeholder, original)
         this.reverse.set(original, placeholder)
         this.used.set(placeholder, usedAt)
+        this.version++
       } else if (current === original && usedAt > this.used.get(placeholder)) {
         this.used.set(placeholder, usedAt)
       }
@@ -190,6 +195,7 @@ export class PlaceholderSession {
       this.forward.delete(placeholder)
       this.used.delete(placeholder)
     }
+    this.version++
   }
 }
 

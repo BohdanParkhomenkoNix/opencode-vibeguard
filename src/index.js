@@ -20,7 +20,8 @@ export const NO_RESTORE_TOOLS = new Set(["websearch"])
  * Built-in tools whose input the model writes itself: only their `execute.before` teaches which
  * values the model made up. A Code Mode inner call fires `execute.before` with the outer session
  * id and an input the script built at run time, possibly from real data the provider never saw;
- * MCP and plugin tools are reached that way, so their input is always treated as real data.
+ * MCP and plugin tools are reached that way, so their input is always treated as real data, even
+ * under a name in this set (an MCP server `apply` with a tool `patch` is `apply_patch`).
  */
 export const LEARN_TOOLS = new Set([
   "write", "edit", "multiedit", "patch", "apply_patch", "shell", "bash", "read", "glob", "grep", "list",
@@ -34,6 +35,9 @@ async function bodyText(request) {
   if (request && typeof request.body === "string") return request.body
   throw new Error("vibeguard: cannot read the request body")
 }
+
+/** How many outer `execute` call ids are remembered to tell their inner calls apart. */
+export const EXECUTE_IDS = 1000
 
 /** If OpenCode ever sends a request whose hook failed, it goes out empty, whatever shape it has. */
 function block(event) {
@@ -115,6 +119,17 @@ async function setup(ctx) {
   const changed = () => {
     if (state.saver && (state.session.dirty || state.tracker.dirty)) state.saver.request()
   }
+  // A Code Mode inner call carries the id of its outer `execute` call (docs/v2-facts.md F12).
+  const executeIds = new Set()
+  const isInnerCall = (event) => {
+    const key = `${event.sessionID}\u0000${event.id}`
+    if (event.tool === "execute") {
+      executeIds.add(key)
+      if (executeIds.size > EXECUTE_IDS) executeIds.delete(executeIds.values().next().value)
+      return false
+    }
+    return event.id !== undefined && executeIds.has(key)
+  }
 
   for (const name of REQUEST_HOOKS) {
     await ctx.session.hook(name, async (event) => {
@@ -148,7 +163,7 @@ async function setup(ctx) {
     ready()
     const origin = originOf(event.sessionID)
     // Read before restore: the input is still exactly what the model wrote.
-    if (origin && LEARN_TOOLS.has(event.tool)) classify({ input: event.input }, "model", state.patterns, state.session, origin)
+    if (origin && LEARN_TOOLS.has(event.tool) && !isInnerCall(event)) classify({ input: event.input }, "model", state.patterns, state.session, origin)
     if (!NO_RESTORE_TOOLS.has(event.tool)) {
       // The model was shown only the placeholder: the value behind it reached it as input.
       const restored = []
