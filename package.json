@@ -1,6 +1,6 @@
 {
   "name": "opencode-vibeguard",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "OpenCode V2 plugin: replaces secrets with __VG_ placeholders before requests reach the LLM provider and restores them before tools run",
   "type": "module",
   "main": "./src/index.js",

@@ -16,14 +16,17 @@ function parseNested(text) {
   }
 }
 
+/** Collects { text, json }: json marks a string that was decoded as JSON and walked. */
 function collect(value, out, depth) {
   mapStrings(value, (text) => {
-    out.push(text)
+    const entry = { text, json: false }
+    out.push(entry)
     if (depth < MAX_JSON_DEPTH) {
       const nested = parseNested(text)
       if (nested !== undefined) {
         try {
           collect(nested, out, depth + 1)
+          entry.json = true
         } catch (error) {
           // Hostile deep JSON overflows the stack; the raw string is already in `out`.
           if (!(error instanceof RangeError)) throw error
@@ -39,9 +42,9 @@ function stringsOf(bodyText) {
   try {
     parsed = JSON.parse(bodyText)
   } catch {
-    return [bodyText]
+    return [{ text: bodyText, json: false }]
   }
-  if (typeof parsed === "string") return [parsed]
+  if (typeof parsed === "string") return [{ text: parsed, json: false }]
   const out = []
   // Decoded strings, not the raw body: a secret with a quote or a newline is escaped in JSON
   // and would slip past a substring search of the wire text. Strings that are JSON themselves
@@ -70,6 +73,8 @@ function leakIn(text, known, placeholderOf, patterns, prefix) {
 /**
  * Last line of defence before bytes leave the machine: anything the rules match, or any value
  * already known to be secret, in any string of the outgoing body, also with JSON escapes undone.
+ * A string that is JSON with escapes is checked with them undone only, so a value whose own text
+ * is an escape spelling (`C0rp\taxes!`) is not found where the string holds the decoded character.
  * Reports the category only.
  */
 export function findLeak(bodyText, patterns, session) {
@@ -77,9 +82,13 @@ export function findLeak(bodyText, patterns, session) {
   const placeholders = getPlaceholderRegex(session.prefix)
   const placeholderOf = new Map(session.knownEntries())
   const known = knownMatcher([...placeholderOf.keys()])
-  for (const raw of stringsOf(bodyText)) {
+  for (const { text: raw, json } of stringsOf(bodyText)) {
     const text = raw.replace(placeholders, " ")
-    for (const view of [text, ...escapedViews(text)]) {
+    const views = escapedViews(text)
+    // JSON text with escapes is checked only with them undone: in the escaped spelling an escape
+    // glues to its neighbour (`\n@pytest.fixture` reads as the email `n@pytest.fixture`), and in
+    // `arguments` OpenCode writes that spelling itself, so the redaction never sees it to mask.
+    for (const view of json && views.length > 0 ? views : [text, ...views]) {
       const leak = leakIn(view, known, placeholderOf, patterns, session.prefix)
       if (leak) return leak
     }

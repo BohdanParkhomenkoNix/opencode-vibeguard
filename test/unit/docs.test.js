@@ -30,8 +30,8 @@ test("README documents exclude by domain, ttl 0s and key permissions", () => {
   assert.match(readme, /readable by others[^\n]*0600/)
 })
 
-test("package version is 0.2.5", () => {
-  assert.equal(JSON.parse(read("package.json")).version, "0.2.5")
+test("package version is 0.2.6", () => {
+  assert.equal(JSON.parse(read("package.json")).version, "0.2.6")
 })
 
 test("README limits: escaped secrets are masked; domain exclude is address-shaped only", () => {
