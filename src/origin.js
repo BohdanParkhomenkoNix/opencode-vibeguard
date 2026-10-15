@@ -1,10 +1,13 @@
+import { RENEW_STEP_MS } from "./session.js"
+
 /** OpenCode starts a subagent's first user message with this line, then the parent's prompt. */
 export const SUBAGENT_PREAMBLE = "You are a subagent spawned by another session.\n"
 
 /**
  * Which values the model made up, per session. A value is kept as the 12-hex HMAC a placeholder
  * carries (`hashOf`), never in plain text. A subagent session links to the session that spawned
- * it and sees its parent's values as made up too. `dirty` is set by any change.
+ * it and sees its parent's values as made up too. `dirty` is set by any change; a renewal sets it
+ * only when it moves last use forward by RENEW_STEP_MS.
  */
 export class OriginTracker {
   /** @param {{ hashOf(value: string): string, ttlMs: number }} options */
@@ -18,7 +21,7 @@ export class OriginTracker {
     this.dirty = false
   }
 
-  /** The session's record, created or renewed. */
+  /** The session's record, created or renewed; a renewal alone sets `dirty` as PlaceholderSession#touch does. */
   record(sessionId, now = Date.now()) {
     let record = this.sessions.get(sessionId)
     if (!record) {
@@ -26,8 +29,8 @@ export class OriginTracker {
       this.sessions.set(sessionId, record)
       this.dirty = true
     } else if (record.lastUsed < now) {
+      if (now - record.lastUsed >= RENEW_STEP_MS) this.dirty = true
       record.lastUsed = now
-      this.dirty = true
     }
     return record
   }

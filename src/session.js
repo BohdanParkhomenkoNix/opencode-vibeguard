@@ -9,6 +9,9 @@ function sanitizeCategory(input) {
   return safe
 }
 
+/** A last-use renewal alone marks the store for saving only when it moves this far. */
+export const RENEW_STEP_MS = 60_000
+
 /** The 12-hex hash inside a placeholder, lowercased; undefined for anything else. */
 export function placeholderHash(placeholder) {
   return String(placeholder).match(/_([0-9a-fA-F]{12})(?:_\d+)?__$/)?.[1]?.toLowerCase()
@@ -19,7 +22,8 @@ export function placeholderHash(placeholder) {
  * - placeholder: __VG_<CATEGORY>_<hash12>__, hash12 = first 12 hex chars of HMAC-SHA256(key, value)
  * - a mapping lives while it is used: ttlMs counts from the last use; 0 (`session.ttl: "0s"`)
  *   means mappings never expire by age; maxMappings evicts the least recently used
- * - `dirty` is set by any change so the caller knows the store needs saving
+ * - `dirty` is set by any change so the caller knows the store needs saving; a renewal sets it
+ *   only when it moves last use forward by RENEW_STEP_MS
  */
 export class PlaceholderSession {
   /**
@@ -70,12 +74,15 @@ export class PlaceholderSession {
     if (oldestPlaceholder) this.drop(oldestPlaceholder)
   }
 
-  /** Renews a mapping; never moves its last use back. */
+  /**
+   * Renews a mapping; never moves its last use back. A renewal alone is worth saving only when it
+   * moves last use forward by RENEW_STEP_MS: otherwise every request would rewrite the store.
+   */
   touch(placeholder, now = Date.now()) {
     const usedAt = this.used.get(placeholder)
     if (usedAt === undefined || usedAt >= now) return
     this.used.set(placeholder, now)
-    this.dirty = true
+    if (now - usedAt >= RENEW_STEP_MS) this.dirty = true
   }
 
   lookup(placeholder, now = Date.now()) {

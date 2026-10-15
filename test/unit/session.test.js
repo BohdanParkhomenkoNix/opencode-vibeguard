@@ -138,6 +138,31 @@ test("an import over max_mappings keeps the most recently used, in one pass", ()
   assert.ok(elapsed < 1000, `import and the next placeholder took ${elapsed.toFixed(0)} ms`)
 })
 
+test("a renewal sets dirty only when it moves last use forward by 60 s or more; the time always moves", () => {
+  const s = make(KEY_A, { ttlMs: 0 })
+  const ph = s.getOrCreatePlaceholder("hunter2", "test")
+  const t0 = s.exportMappings()[0][2]
+  s.dirty = false
+  s.touch(ph, t0 + 59_999)
+  assert.equal(s.dirty, false)
+  assert.equal(s.exportMappings()[0][2], t0 + 59_999)
+  s.lookup(ph, t0 + 119_998)
+  assert.equal(s.dirty, false)
+  assert.equal(s.exportMappings()[0][2], t0 + 119_998)
+  s.lookupReverse("hunter2", t0 + 179_998)
+  assert.equal(s.dirty, true)
+  assert.equal(s.exportMappings()[0][2], t0 + 179_998)
+})
+
+test("a new mapping and a drop still set dirty at once", () => {
+  const s = make()
+  s.getOrCreatePlaceholder("hunter2", "test")
+  assert.equal(s.dirty, true)
+  s.dirty = false
+  s.drop(s.lookupReverse("hunter2"))
+  assert.equal(s.dirty, true)
+})
+
 test("dirty is set by a change and cleared by the caller", () => {
   const s = make()
   assert.equal(s.dirty, false)

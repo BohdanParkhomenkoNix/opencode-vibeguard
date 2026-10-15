@@ -78,6 +78,33 @@ test("sessions and handoffs unused for ttl are dropped", () => {
   assert.deepEqual(o.exportState(), { sessions: {}, handoffs: [] })
 })
 
+test("a session renewal sets dirty only when it moves last use forward by 60 s or more; the time always moves", () => {
+  const o = make()
+  const t0 = 1_000_000
+  o.record("s1", t0)
+  assert.equal(o.dirty, true)
+  o.dirty = false
+  o.record("s1", t0 + 59_999)
+  assert.equal(o.dirty, false)
+  assert.equal(o.exportState().sessions.s1.lastUsed, t0 + 59_999)
+  o.record("s1", t0 + 119_998)
+  assert.equal(o.dirty, false)
+  o.record("s1", t0 + 179_998)
+  assert.equal(o.dirty, true)
+  assert.equal(o.exportState().sessions.s1.lastUsed, t0 + 179_998)
+})
+
+test("a model-made value, a handoff and a link still set dirty at once", () => {
+  const o = make()
+  o.record("parent")
+  o.record("child")
+  for (const change of [() => o.markModelMade("parent", MADE), () => o.addHandoff("p", "parent"), () => o.linkSubagent("child", `${SUBAGENT_PREAMBLE}p`)]) {
+    o.dirty = false
+    change()
+    assert.equal(o.dirty, true)
+  }
+})
+
 test("dirty is set by a change and cleared by the caller", () => {
   const o = make()
   assert.equal(o.dirty, false)
