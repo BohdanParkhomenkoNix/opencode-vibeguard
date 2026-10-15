@@ -9,14 +9,17 @@ function sanitizeCategory(input) {
   return safe
 }
 
-function toHexLower(buffer) {
-  return Buffer.from(buffer).toString("hex")
+/** The 12-hex hash inside a placeholder, lowercased; undefined for anything else. */
+export function placeholderHash(placeholder) {
+  return String(placeholder).match(/_([0-9a-fA-F]{12})(?:_\d+)?__$/)?.[1]?.toLowerCase()
 }
 
 /**
  * Placeholder ↔ value map shared by every session of one OpenCode process.
  * - placeholder: __VG_<CATEGORY>_<hash12>__, hash12 = first 12 hex chars of HMAC-SHA256(key, value)
- * - ttlMs 0 (`session.ttl: "0s"`) means mappings never expire by age; maxMappings still applies
+ * - a mapping lives while it is used: ttlMs counts from the last use; 0 (`session.ttl: "0s"`)
+ *   means mappings never expire by age; maxMappings evicts the least recently used
+ * - `dirty` is set by any change so the caller knows the store needs saving
  */
 export class PlaceholderSession {
   /**
@@ -36,66 +39,78 @@ export class PlaceholderSession {
     this.forward = new Map()
     /** @type {Map<string,string>} */
     this.reverse = new Map()
-    /** @type {Map<string,number>} */
-    this.created = new Map()
+    /** @type {Map<string,number>} placeholder -> last use */
+    this.used = new Map()
+    this.dirty = false
+  }
+
+  drop(placeholder) {
+    const original = this.forward.get(placeholder)
+    this.forward.delete(placeholder)
+    this.used.delete(placeholder)
+    if (original !== undefined) this.reverse.delete(original)
+    this.dirty = true
   }
 
   cleanup(now = Date.now()) {
     if (!Number.isFinite(this.ttlMs) || this.ttlMs <= 0) return
-    for (const [placeholder, createdAt] of this.created.entries()) {
-      if (now - createdAt <= this.ttlMs) continue
-      const original = this.forward.get(placeholder)
-      this.forward.delete(placeholder)
-      this.created.delete(placeholder)
-      if (original !== undefined) this.reverse.delete(original)
+    for (const [placeholder, usedAt] of this.used.entries()) {
+      if (now - usedAt > this.ttlMs) this.drop(placeholder)
     }
   }
 
   evictOldest() {
     let oldestPlaceholder = ""
     let oldestTime = Infinity
-    for (const [placeholder, createdAt] of this.created.entries()) {
-      if (createdAt >= oldestTime) continue
-      oldestTime = createdAt
+    for (const [placeholder, usedAt] of this.used.entries()) {
+      if (usedAt >= oldestTime) continue
+      oldestTime = usedAt
       oldestPlaceholder = placeholder
     }
-    if (!oldestPlaceholder) return
-    const original = this.forward.get(oldestPlaceholder)
-    this.forward.delete(oldestPlaceholder)
-    this.created.delete(oldestPlaceholder)
-    if (original !== undefined) this.reverse.delete(original)
+    if (oldestPlaceholder) this.drop(oldestPlaceholder)
   }
 
-  lookup(placeholder) {
-    return this.forward.get(placeholder)
+  /** Renews a mapping; never moves its last use back. */
+  touch(placeholder, now = Date.now()) {
+    const usedAt = this.used.get(placeholder)
+    if (usedAt === undefined || usedAt >= now) return
+    this.used.set(placeholder, now)
+    this.dirty = true
   }
 
-  lookupReverse(original) {
-    return this.reverse.get(original)
+  lookup(placeholder, now = Date.now()) {
+    const original = this.forward.get(placeholder)
+    if (original !== undefined) this.touch(placeholder, now)
+    return original
+  }
+
+  lookupReverse(original, now = Date.now()) {
+    const placeholder = this.reverse.get(original)
+    if (placeholder !== undefined) this.touch(placeholder, now)
+    return placeholder
   }
 
   knownEntries() {
     return this.reverse.entries()
   }
 
-  /**
-   * 与 VibeGuard 一致：placeholder = `${prefix}${CATEGORY}_${hash12}__`
-   * @param {string} original
-   * @param {string} category
-   */
+  hashOf(original) {
+    return createHmac("sha256", this.secret).update(String(original)).digest("hex").slice(0, 12)
+  }
+
   generatePlaceholder(original, category) {
-    const cat = sanitizeCategory(category)
-    const h = createHmac("sha256", this.secret)
-    h.update(String(original))
-    const sum = h.digest()
-    const hash12 = toHexLower(sum).slice(0, 12)
-    const base = `${this.prefix}${cat}_${hash12}`
-    return `${base}__`
+    return `${this.prefix}${sanitizeCategory(category)}_${this.hashOf(original)}__`
+  }
+
+  set(placeholder, original, now) {
+    this.forward.set(placeholder, original)
+    this.reverse.set(original, placeholder)
+    this.used.set(placeholder, now)
+    this.dirty = true
   }
 
   /**
-   * 获取或创建占位符，并注册映射。
-   * 设计目标：同一会话内，同一 original 始终映射到同一 placeholder。
+   * The same original always maps to the same placeholder.
    * @param {string} original
    * @param {string} category
    */
@@ -112,34 +127,47 @@ export class PlaceholderSession {
 
     const base = this.generatePlaceholder(original, category)
     const current = this.forward.get(base)
-    if (current === undefined) {
-      this.forward.set(base, original)
-      this.reverse.set(original, base)
-      this.created.set(base, now)
+    if (current === undefined || current === original) {
+      this.set(base, original, now)
       return base
     }
 
-    if (current === original) {
-      this.reverse.set(original, base)
-      this.created.set(base, now)
-      return base
-    }
-
-    // 极低概率：hash12 冲突。追加 _N 后缀保证唯一性（与 VibeGuard 一致的策略）。
-    const withoutSuffix = base.slice(0, -2) // 去掉末尾 "__"
+    // A hash12 collision: a _N suffix keeps placeholders unique.
+    const withoutSuffix = base.slice(0, -2)
     for (let i = 2; ; i++) {
       const candidate = `${withoutSuffix}_${i}__`
       const prev = this.forward.get(candidate)
-      if (prev === undefined) {
-        this.forward.set(candidate, original)
-        this.reverse.set(original, candidate)
-        this.created.set(candidate, now)
+      if (prev === undefined || prev === original) {
+        this.set(candidate, original, now)
         return candidate
       }
-      if (prev === original) {
-        this.reverse.set(original, candidate)
-        this.created.set(candidate, now)
-        return candidate
+    }
+  }
+
+  /** [placeholder, original, lastUsed] for every mapping, for the store. */
+  exportMappings() {
+    return [...this.forward].map(([placeholder, original]) => [placeholder, original, this.used.get(placeholder)])
+  }
+
+  /**
+   * Takes mappings from the store. An entry that conflicts with a mapping in memory (the same
+   * placeholder for another value, or the same value under another placeholder) is skipped;
+   * the same mapping keeps the later last use. Importing does not set `dirty`.
+   */
+  importMappings(entries) {
+    if (!Array.isArray(entries)) return
+    for (const entry of entries) {
+      if (!Array.isArray(entry)) continue
+      const [placeholder, original, usedAt] = entry
+      if (typeof placeholder !== "string" || typeof original !== "string" || !Number.isFinite(usedAt)) continue
+      const current = this.forward.get(placeholder)
+      if (current === undefined) {
+        if (this.reverse.has(original)) continue
+        this.forward.set(placeholder, original)
+        this.reverse.set(original, placeholder)
+        this.used.set(placeholder, usedAt)
+      } else if (current === original && usedAt > this.used.get(placeholder)) {
+        this.used.set(placeholder, usedAt)
       }
     }
   }
