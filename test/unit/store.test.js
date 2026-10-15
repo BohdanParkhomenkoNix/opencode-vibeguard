@@ -1,6 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs"
+import * as nodeFs from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { createSaver, defaultStoreFile, emptyPayload, loadStore, mergePayloads, open, saveStore, seal } from "../../src/store.js"
@@ -39,9 +40,14 @@ const flipByte = (file) => {
   writeFileSync(file, JSON.stringify(envelope))
 }
 
+const withoutKid = (file) => {
+  const { kid, ...envelope } = JSON.parse(seal(PAYLOAD, KEY))
+  writeFileSync(file, JSON.stringify(envelope))
+}
+
 for (const [name, write] of [
   ["a flipped byte", flipByte],
-  ["another key", (file) => writeFileSync(file, seal(PAYLOAD, OTHER))],
+  ["an envelope without a key id", withoutKid],
   ["not JSON", (file) => writeFileSync(file, "garbage hunter2")],
   ["a payload of the wrong shape", (file) => writeFileSync(file, seal({ mappings: "x" }, KEY))],
 ]) {
@@ -146,4 +152,90 @@ test("a failing save is logged without its message and retried on the next reque
   clock = 5000
   saver.request()
   assert.equal(calls, 2)
+})
+
+const corruptFiles = (dir) => readdirSync(dir).filter((n) => n.includes(".corrupt-"))
+
+test("the envelope carries a key id: 16 hex chars, the same for one key, another for another key", () => {
+  const kid = JSON.parse(seal(PAYLOAD, KEY)).kid
+  assert.match(kid, /^[0-9a-f]{16}$/)
+  assert.equal(JSON.parse(seal(emptyPayload(), KEY)).kid, kid)
+  assert.notEqual(JSON.parse(seal(PAYLOAD, OTHER)).kid, kid)
+})
+
+test("a store sealed with another key is a FOREIGN_KEY error, left in place on load, logged without bytes", (t) => {
+  const file = path.join(tmpdir(t), "vg.store")
+  const text = seal(PAYLOAD, OTHER)
+  writeFileSync(file, text)
+  assert.throws(() => open(text, KEY), (error) => error.code === "FOREIGN_KEY" && !error.message.includes("hunter2"))
+  const logs = []
+  assert.deepEqual(loadStore(file, KEY, { log: (l) => logs.push(l) }), emptyPayload())
+  assert.equal(readFileSync(file, "utf8"), text)
+  assert.deepEqual(corruptFiles(path.dirname(file)), [])
+  assert.deepEqual(logs, [`[vibeguard] store ${file} is sealed with another key; set store_file to keep a separate store for this key`])
+})
+
+test("two keys saving alternately into one path never move the store aside; the first key keeps its mappings", (t) => {
+  const dir = tmpdir(t)
+  const file = path.join(dir, "vg.store")
+  const mine = { mappings: [["__VG_T_aaaaaaaaaaaa__", "one", 10]], sessions: {}, handoffs: [] }
+  const theirs = { mappings: [["__VG_T_bbbbbbbbbbbb__", "two", 10]], sessions: {}, handoffs: [] }
+  const logs = []
+  const foreign = createSaver(() => saveStore(file, OTHER, theirs, { now: 20 }), { log: (l) => logs.push(l) })
+  for (let round = 0; round < 3; round++) {
+    saveStore(file, KEY, mine, { now: 20 })
+    assert.throws(() => saveStore(file, OTHER, theirs, { now: 20 }), (error) => error.code === "FOREIGN_KEY")
+  }
+  foreign.request()
+  assert.deepEqual(logs, ["[vibeguard] store save failed: FOREIGN_KEY"])
+  assert.deepEqual(corruptFiles(dir), [])
+  assert.deepEqual(loadStore(file, KEY).mappings, mine.mappings)
+})
+
+test("a store that exists but cannot be read is not overwritten by a save", () => {
+  const renames = []
+  const writes = []
+  const fs = {
+    readFileSync() { throw Object.assign(new Error("denied"), { code: "EACCES" }) },
+    mkdirSync() {},
+    writeFileSync(p) { writes.push(p) },
+    chmodSync() {},
+    renameSync(from, to) { renames.push([from, to]) },
+    unlinkSync() {},
+  }
+  assert.throws(() => saveStore("/x/vg.store", KEY, PAYLOAD, { fs, log: () => {} }), (error) => error.code === "EACCES")
+  assert.deepEqual(renames, [])
+  assert.deepEqual(writes, [])
+})
+
+/** A real fs with one call replaced, to see which temp file a save writes. */
+const spyFs = (overrides) => ({ ...nodeFs, ...overrides })
+
+test("the temp file name has the pid and random bytes", (t) => {
+  const file = path.join(tmpdir(t), "vg.store")
+  const temps = []
+  const fs = spyFs({ writeFileSync: (p, ...rest) => { temps.push(p); return nodeFs.writeFileSync(p, ...rest) } })
+  saveStore(file, KEY, PAYLOAD, { now: 1000, fs })
+  saveStore(file, KEY, PAYLOAD, { now: 1000, fs })
+  for (const temp of temps) {
+    const prefix = `${file}.tmp-${process.pid}-`
+    assert.ok(temp.startsWith(prefix), temp)
+    assert.match(temp.slice(prefix.length), /^[0-9a-f]{8}$/)
+  }
+  assert.notEqual(temps[0], temps[1])
+})
+
+test("a failed write or rename removes the temp file and rethrows", (t) => {
+  for (const failing of ["writeFileSync", "renameSync"]) {
+    const dir = tmpdir(t)
+    const file = path.join(dir, "vg.store")
+    const fs = spyFs({
+      [failing]: (...args) => {
+        if (failing === "writeFileSync") nodeFs.writeFileSync(args[0], "partial")
+        throw Object.assign(new Error("disk"), { code: "ENOSPC" })
+      },
+    })
+    assert.throws(() => saveStore(file, KEY, PAYLOAD, { now: 1000, fs }), (error) => error.code === "ENOSPC", failing)
+    assert.deepEqual(readdirSync(dir), [], failing)
+  }
 })

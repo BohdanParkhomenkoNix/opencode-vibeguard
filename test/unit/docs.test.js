@@ -51,6 +51,10 @@ test("the example config shows the default store_file", () => {
   assert.equal(JSON.parse(read("vibeguard.config.json.example")).store_file, "~/.local/share/opencode/vibeguard.store")
 })
 
+test("README: a store sealed with another key is left untouched", () => {
+  assert.match(read("README.md"), /store written with another key is left untouched[^\n]*in memory[^\n]*own `store_file`/)
+})
+
 test("README limits: inputs of MCP or plugin tools are real data", () => {
   assert.match(read("README.md"), /inputs of MCP or plugin tools[^\n]*always treated as real data/)
 })
