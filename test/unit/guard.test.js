@@ -212,3 +212,11 @@ test("what the redaction leaves always passes the guard once serialized as OpenC
     }
   }
 })
+
+test("a known value the guard finds has its mapping renewed", () => {
+  const s = session()
+  const ph = s.getOrCreatePlaceholder("Fake/Known+Value-2", "known")
+  s.used.set(ph, 1)
+  assert.deepEqual(findLeak(body("x Fake/Known+Value-2 y"), buildPatternSet({}), s), { category: "KNOWN" })
+  assert.ok(s.used.get(ph) > 1)
+})
