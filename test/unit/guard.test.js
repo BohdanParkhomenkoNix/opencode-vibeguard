@@ -66,6 +66,13 @@ test("placeholders inside nested JSON pass", () => {
   assert.equal(findLeak(toolCallBody(JSON.stringify({ command: `mail ${ph}` })), patterns, s), null)
 })
 
+test("JSON escapes in tool-call arguments do not glue into a match", () => {
+  // `\n` before `@pytest.fixture` reads as the email `n@pytest.fixture` in the wire text only.
+  const code = "import pytest\n\n@pytest.fixture\ndef t():\n    pass\n"
+  assert.equal(findLeak(toolCallBody(JSON.stringify({ path: "tests/test_x.py", content: code })), patterns, session()), null)
+  assert.deepEqual(findLeak(toolCallBody(JSON.stringify({ content: "x\nalice@corp.io" })), patterns, session()), { category: "EMAIL" })
+})
+
 test("text that only looks like JSON is scanned as text", () => {
   assert.equal(findLeak(body("{not json"), patterns, session()), null)
   assert.deepEqual(findLeak(body("[oops alice@corp.io"), patterns, session()), { category: "EMAIL" })
