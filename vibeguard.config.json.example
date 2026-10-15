@@ -2,7 +2,7 @@
   "enabled": true,
   "debug": false,
   "placeholder_prefix": "__VG_",
-  "session": { "ttl": "24h", "max_mappings": 100000 },
+  "session": { "ttl": "30d", "max_mappings": 100000 },
   "patterns": {
     "keywords": [],
     "regex": [],
