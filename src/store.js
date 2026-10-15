@@ -116,7 +116,7 @@ const isEntry = (entry) => Array.isArray(entry) && typeof entry[0] === "string" 
 
 /**
  * Union of two payloads: an entry in either is kept with the later last use; a session's model
- * set is the union. Then everything unused for ttlMs is dropped and mappings are capped at
+ * and input sets are each the union. Then everything unused for ttlMs is dropped and mappings are capped at
  * maxMappings, least recently used first, so a merge never brings back what expiry removed.
  * For a value under two placeholders, the first one seen wins (`a` before `b`).
  */
@@ -144,11 +144,12 @@ export function mergePayloads(a, b, { ttlMs = 0, maxMappings = Infinity, now = D
   for (const source of [a.sessions ?? {}, b.sessions ?? {}]) {
     for (const [id, record] of Object.entries(source)) {
       if (!record || !Number.isFinite(record.lastUsed)) continue
-      const current = sessions[id] ?? (sessions[id] = { lastUsed: record.lastUsed, model: [] })
+      const current = sessions[id] ?? (sessions[id] = { lastUsed: record.lastUsed, model: [], input: [] })
       current.lastUsed = Math.max(current.lastUsed, record.lastUsed)
       if (current.parent === undefined && typeof record.parent === "string") current.parent = record.parent
-      const model = Array.isArray(record.model) ? record.model.filter((h) => typeof h === "string") : []
-      current.model = [...new Set([...current.model, ...model])]
+      const hashes = (list) => (Array.isArray(list) ? list.filter((h) => typeof h === "string") : [])
+      current.model = [...new Set([...current.model, ...hashes(record.model)])]
+      current.input = [...new Set([...current.input, ...hashes(record.input)])]
     }
   }
   for (const [id, record] of Object.entries(sessions)) if (!alive(record.lastUsed)) delete sessions[id]

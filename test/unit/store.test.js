@@ -73,7 +73,7 @@ test("merge keeps entries from both sides with the later last use", () => {
   }
   const m = mergePayloads(a, b, { now: 30 })
   assert.deepEqual(m.mappings, [["__VG_T_aaaaaaaaaaaa__", "one", 20], ["__VG_T_bbbbbbbbbbbb__", "two", 5]])
-  assert.deepEqual({ ...m.sessions.s1, model: [...m.sessions.s1.model].sort() }, { lastUsed: 10, parent: "p", model: ["111111111111", "222222222222"] })
+  assert.deepEqual({ ...m.sessions.s1, model: [...m.sessions.s1.model].sort() }, { lastUsed: 10, parent: "p", model: ["111111111111", "222222222222"], input: [] })
   assert.equal(m.sessions.s2.lastUsed, 7)
   assert.deepEqual(m.handoffs, [["dddddddddddd", "s1", 3]])
 })
@@ -238,4 +238,14 @@ test("a failed write or rename removes the temp file and rethrows", (t) => {
     assert.throws(() => saveStore(file, KEY, PAYLOAD, { now: 1000, fs }), (error) => error.code === "ENOSPC", failing)
     assert.deepEqual(readdirSync(dir), [], failing)
   }
+})
+
+test("a merge keeps the union of each session's input set; a record without input merges as empty", () => {
+  const now = Date.now()
+  const a = { mappings: [], sessions: { s1: { lastUsed: now, model: ["aaaaaaaaaaaa"], input: ["bbbbbbbbbbbb"] } }, handoffs: [] }
+  const b = { mappings: [], sessions: { s1: { lastUsed: now, model: [], input: ["cccccccccccc", 5, "bbbbbbbbbbbb"] }, s2: { lastUsed: now, model: [] } }, handoffs: [] }
+  const merged = mergePayloads(a, b, { now })
+  assert.deepEqual(merged.sessions.s1.input, ["bbbbbbbbbbbb", "cccccccccccc"])
+  assert.deepEqual(merged.sessions.s1.model, ["aaaaaaaaaaaa"])
+  assert.deepEqual(merged.sessions.s2.input, [])
 })
