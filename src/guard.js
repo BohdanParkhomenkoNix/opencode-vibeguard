@@ -73,6 +73,8 @@ function leakIn(text, known, placeholderOf, patterns, prefix) {
 /**
  * Last line of defence before bytes leave the machine: anything the rules match, or any value
  * already known to be secret, in any string of the outgoing body, also with JSON escapes undone.
+ * A string that is JSON with escapes is checked with them undone only, so a value whose own text
+ * is an escape spelling (`C0rp\taxes!`) is not found where the string holds the decoded character.
  * Reports the category only.
  */
 export function findLeak(bodyText, patterns, session) {
