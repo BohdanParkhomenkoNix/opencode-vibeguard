@@ -237,3 +237,17 @@ test("a corrupt store is moved aside and the plugin still guards", async (t) => 
   assert.ok(!JSON.stringify(e).includes(SECRET))
   assert.ok(readdirSync(path.dirname(storeOf(home))).some((n) => n.startsWith("vibeguard.store.corrupt-")))
 })
+
+test("a value restored from a placeholder is a secret in that session, even when the model's call holds it later", async (t) => {
+  const REAL = "jane.doe@realcorp.io"
+  const hooks = await startIn(t, tmpdir(t), MAIL)
+  const first = { sessionID: "A", system: [], messages: [{ role: "user", content: [{ type: "text", text: REAL }] }] }
+  await hooks.session.context(first)
+  const ph = first.messages[0].content[0].text
+  const call = { tool: "shell", sessionID: "B", input: { command: `echo ${ph}` } }
+  await hooks.tool["execute.before"](call)
+  assert.equal(call.input.command, `echo ${REAL}`)
+  const later = { sessionID: "B", system: [], messages: [{ role: "assistant", content: [{ type: "tool-call", id: "c", name: "shell", input: { command: `echo ${REAL}` } }] }] }
+  await hooks.session.context(later)
+  assert.ok(!JSON.stringify(later).includes(REAL))
+})

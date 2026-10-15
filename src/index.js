@@ -150,8 +150,16 @@ async function setup(ctx) {
     // Read before restore: the input is still exactly what the model wrote.
     if (origin && LEARN_TOOLS.has(event.tool)) classify({ input: event.input }, "model", state.patterns, state.session, origin)
     if (!NO_RESTORE_TOOLS.has(event.tool)) {
-      if (typeof event.input === "string") event.input = restoreText(event.input, state.session)
-      else restoreStrings(event.input, state.session)
+      // The model was shown only the placeholder: the value behind it reached it as input.
+      const restored = []
+      const session = { prefix: state.session.prefix, lookup: (ph) => {
+        const value = state.session.lookup(ph)
+        if (value !== undefined) restored.push(value)
+        return value
+      } }
+      if (typeof event.input === "string") event.input = restoreText(event.input, session)
+      else restoreStrings(event.input, session)
+      if (origin) for (const value of restored) state.tracker.markInput(origin.sessionId, value)
     }
     // The restored prompt is what the subagent receives as its first message.
     if (origin && event.tool === "subagent" && typeof event.input?.prompt === "string") {
