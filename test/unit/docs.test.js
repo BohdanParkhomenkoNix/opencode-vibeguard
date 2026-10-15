@@ -83,3 +83,7 @@ test("README: exclude normalization, broad entries, local logs", () => {
 test("no orphan screenshot in the repo", () => {
   assert.equal(existsSync(new URL("../../screenshot.png", import.meta.url)), false)
 })
+
+test("README says the model-made class is per session", () => {
+  assert.match(read("README.md"), /secret in one session and made up by the model in a parallel one/)
+})

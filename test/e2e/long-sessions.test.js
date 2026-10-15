@@ -94,3 +94,44 @@ test("a subagent receives a value its parent made up, unmasked", async (t) => {
   assert.equal(readFileSync(path.join(project.dir, "sub2.txt"), "utf8"), MADE)
   for (const [i, r] of mock.requests.entries()) assert.ok(!/__VG_EMAIL_/.test(r.raw), `request ${i} masks the made-up value`)
 })
+
+test("a secret in one session is model-made in another where the model writes it first, across a restart", async (t) => {
+  const mock = await startMockProvider((body) => {
+    if (!toolNames(body).includes("write")) return { text: "title" }
+    const prompt = lastUserText(body)
+    const tools = body.messages.filter((m) => m.role === "tool").length
+    if (prompt.includes("people.txt")) {
+      return tools === 0 ? { tool: { name: "read", args: toolArgs(body, "read", { path: "people.txt" }) } } : { text: "done" }
+    }
+    if (prompt.includes("contact file")) {
+      if (tools === 0) return { tool: { name: "write", args: toolArgs(body, "write", { path: "contact.txt", content: `contact ${REAL}\n` }) } }
+      if (tools === 1) return { tool: { name: "read", args: toolArgs(body, "read", { path: "contact.txt" }) } }
+      return { text: "done" }
+    }
+    return { text: "noted" }
+  })
+  t.after(() => mock.close())
+  const base = makeProject(t, { baseURL: mock.baseURL, plugin: false })
+  const project = makeProject(t, { baseURL: mock.baseURL, vibeguard: mailConfig(base.home), files: { "people.txt": `owner ${REAL}\n` } })
+  const a = await runOpencode(project, "Read people.txt")
+  assert.equal(a.code, 0, a.stderr.slice(-3000))
+  const fromA = mock.requests.length
+  for (const [i, r] of mock.requests.entries()) assert.ok(!r.raw.includes(REAL), `session A request ${i} leaks the address`)
+  const sessionB = sessionId()
+  const b = await runOpencode(project, "Write the contact file", { session: sessionB })
+  assert.equal(b.code, 0, b.stderr.slice(-3000))
+  assert.ok(!b.stderr.includes("guard=BLOCKED"), "the guard blocked a request in session B")
+  const inB = mock.requests.slice(fromA).filter((r) => r.body?.messages?.some((m) => m.role === "tool"))
+  assert.ok(inB.length >= 2, "no request after the tools ran in session B")
+  for (const r of inB) assert.ok(!/__VG_EMAIL_/.test(r.raw), "session B masks the value its model wrote first")
+  assert.ok(inB.at(-1).raw.includes(`contact ${REAL}`), "the read-back in session B lacks the value")
+  const fromB = mock.requests.length
+  const again = await runOpencode(project, "Anything else?", { session: sessionB })
+  assert.equal(again.code, 0, again.stderr.slice(-3000))
+  const afterRestart = mock.requests.slice(fromB).filter((r) => r.raw.includes("Anything else?") && toolNames(r.body).includes("write"))
+  assert.ok(afterRestart.length >= 1, "no request after the restart")
+  for (const r of afterRestart) {
+    assert.ok(r.raw.includes(REAL), "after a restart the history lost the value")
+    assert.ok(!/__VG_EMAIL_/.test(r.raw), "after a restart session B masks the value")
+  }
+})
