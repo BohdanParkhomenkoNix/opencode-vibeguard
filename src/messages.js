@@ -2,7 +2,7 @@ import { redactText } from "./engine.js"
 import { escapedForms, escapedViews } from "./escapes.js"
 import { knownMatcher, mapGaps } from "./known.js"
 import { restoreText } from "./restore.js"
-import { getPlaceholderRegex } from "./session.js"
+import { getPlaceholderRegex, placeholderHash } from "./session.js"
 
 /**
  * String fields that identify things rather than carry content. Rewriting them would break
@@ -21,6 +21,7 @@ export const SKIP_KEYS = new Set([
 export const PAYLOAD_KEYS = new Set(["input", "result"])
 
 const NO_SKIP = new Set()
+const NEVER = () => false
 
 function walkable(value) {
   return value !== null && typeof value === "object" && !ArrayBuffer.isView(value) && !(value instanceof Date) && !(value instanceof RegExp)
@@ -75,10 +76,11 @@ function matchesIn(text, patterns) {
  * the rules match whole in the raw gap keeps its own mapping, and only a spelling the raw rules
  * would split takes the decoded value's placeholder. Returns needle -> placeholder.
  */
-function learnFromViews(gap, patterns, session) {
+function learnFromViews(gap, patterns, session, skip) {
   const kept = []
   for (const view of escapedViews(gap)) {
     for (const { original, category } of matchesIn(view, patterns)) {
+      if (skip(original)) continue
       const needles = [original, ...escapedForms(original)].filter((n) => gap.includes(n))
       if (needles.length > 0) kept.push({ original, category, needles })
     }
@@ -108,13 +110,18 @@ function learnFromViews(gap, patterns, session) {
  * Values learned from the views are replaced in every escaped form first, then the rules run on
  * what is left of the raw text. In the other order a rule whose class includes `/` masks only the
  * part of `abc\/def…` after the backslash, and `abc\/` reaches the provider.
+ * A match `skip` accepts (a value the model made up) is left as it is: replacing it with itself.
  */
-function rulePass(root, patterns, session) {
+function rulePass(root, patterns, session, skip = NEVER) {
   const placeholders = getPlaceholderRegex(session.prefix)
+  const masker = skip === NEVER ? session : {
+    prefix: session.prefix,
+    getOrCreatePlaceholder: (original, category) => (skip(original) ? original : session.getOrCreatePlaceholder(original, category)),
+  }
   return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => {
-    const learned = learnFromViews(gap, patterns, session)
+    const learned = learnFromViews(gap, patterns, session, skip)
     const masked = learned.size === 0 ? gap : knownMatcher([...learned.keys()]).replaceIn(gap, placeholders, (found) => learned.get(found))
-    return mapGaps(masked, placeholders, (rest) => redactText(rest, patterns, session).text)
+    return mapGaps(masked, placeholders, (rest) => redactText(rest, patterns, masker).text)
   }), SKIP_KEYS)
 }
 
@@ -122,12 +129,12 @@ function rulePass(root, patterns, session) {
  * Replaces every value the session already knows, and every escaped form of it, with its
  * existing placeholder, longest first. A context rule (a lookbehind) learns a value from one
  * occurrence, but the same value turns up bare or escaped in tool output, and the guard blocks
- * any known value it finds.
+ * any known value it finds. An entry `skipEntry` accepts (made up by the model here) is left.
  */
-function knownPass(root, session) {
+function knownPass(root, session, skipEntry = NEVER) {
   const originalOf = new Map()
-  for (const [original] of session.knownEntries()) {
-    if (!original) continue
+  for (const [original, placeholder] of session.knownEntries()) {
+    if (!original || skipEntry(original, placeholder)) continue
     originalOf.set(original, original)
     for (const form of escapedForms(original)) if (!originalOf.has(form)) originalOf.set(form, original)
   }
@@ -143,13 +150,49 @@ export function redactStrings(root, patterns, session) {
 }
 
 /**
- * Redacts several trees of one request. The known-value pass runs only after every rule pass,
- * because a bare value can sit in a tree walked before the tree where a rule first learns it.
+ * Marks as made up by the model, in origin.sessionId, every rule match in root (the model's own
+ * output) that is not a known secret, in the raw text and in its escaped views. Placeholders
+ * are not scanned. Wrap a tool input as `{ input }` so every key of it is content.
+ * @param {{ sessionId: string, tracker: import("./origin.js").OriginTracker }} origin
  */
-export function redactRequest(roots, patterns, session) {
+export function learnModelMade(root, patterns, session, origin) {
+  const placeholders = getPlaceholderRegex(session.prefix)
+  mapStrings(root, (text) => {
+    mapGaps(text, placeholders, (gap) => {
+      for (const view of [gap, ...escapedViews(gap)]) {
+        for (const { original } of matchesIn(view, patterns)) {
+          if (session.lookupReverse(original) === undefined) origin.tracker.markModelMade(origin.sessionId, original)
+        }
+      }
+      return gap
+    })
+    return text
+  }, SKIP_KEYS)
+}
+
+const isNode = (value) => value !== null && typeof value === "object"
+
+/**
+ * Redacts several trees of one request. Items are walked in order (system, then each message):
+ * a value the model output before anyone sent it is made up by the model and left as it is in
+ * this session; a value sent to the model first is a secret. Without `origin` (no session id)
+ * nothing is model-made. The known-value pass runs only after every rule pass, because a bare
+ * value can sit in a tree walked before the tree where a rule first learns it.
+ * @param {unknown[]} roots
+ * @param {{ sessionId: string, tracker: import("./origin.js").OriginTracker }} [origin]
+ */
+export function redactRequest(roots, patterns, session, origin) {
+  const skip = origin ? (original) => origin.tracker.isModelMade(origin.sessionId, original) : NEVER
+  const skipEntry = origin ? (_original, placeholder) => origin.tracker.isModelMadeHash(origin.sessionId, placeholderHash(placeholder)) : NEVER
   let changed = 0
-  for (const root of roots) changed += rulePass(root, patterns, session)
-  for (const root of roots) changed += knownPass(root, session)
+  for (const root of roots) {
+    const items = Array.isArray(root) && root.every(isNode) ? root : [root]
+    for (const item of items) {
+      if (origin && item?.role === "assistant") learnModelMade(item, patterns, session, origin)
+      changed += rulePass(item, patterns, session, skip)
+    }
+  }
+  for (const root of roots) changed += knownPass(root, session, skipEntry)
   return changed
 }
 
