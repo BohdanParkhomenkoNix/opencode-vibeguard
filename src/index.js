@@ -16,6 +16,17 @@ export const REQUEST_HOOKS = ["context", "title", "compaction", "generate"]
 /** A secret never belongs in a query to a third-party search service. */
 export const NO_RESTORE_TOOLS = new Set(["websearch"])
 
+/**
+ * Built-in tools whose input the model writes itself: only their `execute.before` teaches which
+ * values the model made up. A Code Mode inner call fires `execute.before` with the outer session
+ * id and an input the script built at run time, possibly from real data the provider never saw;
+ * MCP and plugin tools are reached that way, so their input is always treated as real data.
+ */
+export const LEARN_TOOLS = new Set([
+  "write", "edit", "multiedit", "patch", "apply_patch", "shell", "bash", "read", "glob", "grep", "list",
+  "webfetch", "websearch", "todowrite", "subagent", "task", "execute",
+])
+
 /** No readable body is an error, not an empty body: a guard that reads nothing checks nothing. */
 async function bodyText(request) {
   if (request && typeof request.clone === "function") return request.clone().text()
@@ -137,7 +148,7 @@ async function setup(ctx) {
     ready()
     const origin = originOf(event.sessionID)
     // Read before restore: the input is still exactly what the model wrote.
-    if (origin) learnModelMade({ input: event.input }, state.patterns, state.session, origin)
+    if (origin && LEARN_TOOLS.has(event.tool)) learnModelMade({ input: event.input }, state.patterns, state.session, origin)
     if (!NO_RESTORE_TOOLS.has(event.tool)) {
       if (typeof event.input === "string") event.input = restoreText(event.input, state.session)
       else restoreStrings(event.input, state.session)

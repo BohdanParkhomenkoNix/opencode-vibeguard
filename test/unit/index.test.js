@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import plugin, { REQUEST_HOOKS } from "../../src/index.js"
+import plugin, { LEARN_TOOLS, REQUEST_HOOKS } from "../../src/index.js"
 import { tmpdir, withHome } from "../helpers/tmp.js"
 
 const SECRET = "vg-unit-Secret-91"
@@ -196,6 +196,23 @@ test("websearch input is learned from but not restored", async (t) => {
   const readBack = { sessionID: "s1", system: [], messages: [{ role: "user", content: [{ type: "text", text: MADE }] }] }
   await hooks.session.context(readBack)
   assert.equal(readBack.messages[0].content[0].text, MADE)
+})
+
+test("the input of a tool the model does not call directly is real data: masked and blocked", async (t) => {
+  const REAL = "jane.doe@realcorp.io"
+  const hooks = await startIn(t, tmpdir(t), MAIL)
+  // A Code Mode inner call: the outer session id, an input the script built at run time.
+  await hooks.tool["execute.before"]({ tool: "mcp_crm_add", sessionID: "s1", input: { to: REAL } })
+  const result = { sessionID: "s1", system: [], messages: [{ role: "tool", content: [{ type: "tool-result", id: "c", name: "execute", result: { type: "text", value: `added ${REAL}` } }] }] }
+  await hooks.session.context(result)
+  assert.ok(!JSON.stringify(result).includes(REAL))
+  assert.match(result.messages[0].content[0].result.value, /__VG_EMAIL_[0-9a-f]{12}__/)
+  const req = { sessionID: "s1", kind: "primary", request: new Request("http://x/v1/chat/completions", { method: "POST", body: JSON.stringify({ messages: [{ role: "tool", content: `added ${REAL}` }] }) }) }
+  await assert.rejects(hooks.session["http.request"](req), /plaintext EMAIL/)
+})
+
+test("LEARN_TOOLS names the built-in tools whose input the model writes itself", () => {
+  assert.deepEqual([...LEARN_TOOLS].sort(), ["apply_patch", "bash", "edit", "execute", "glob", "grep", "list", "multiedit", "patch", "read", "shell", "subagent", "task", "todowrite", "webfetch", "websearch", "write"])
 })
 
 test("a subagent spawned with a made-up value sees it unmasked", async (t) => {

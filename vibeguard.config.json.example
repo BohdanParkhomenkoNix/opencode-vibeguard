@@ -2,6 +2,7 @@
   "enabled": true,
   "debug": false,
   "placeholder_prefix": "__VG_",
+  "store_file": "~/.local/share/opencode/vibeguard.store",
   "session": { "ttl": "30d", "max_mappings": 100000 },
   "patterns": {
     "keywords": [],

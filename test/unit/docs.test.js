@@ -47,6 +47,14 @@ test("the example config uses the 30d ttl", () => {
   assert.equal(JSON.parse(read("vibeguard.config.json.example")).session.ttl, "30d")
 })
 
+test("the example config shows the default store_file", () => {
+  assert.equal(JSON.parse(read("vibeguard.config.json.example")).store_file, "~/.local/share/opencode/vibeguard.store")
+})
+
+test("README limits: inputs of MCP or plugin tools are real data", () => {
+  assert.match(read("README.md"), /inputs of MCP or plugin tools[^\n]*always treated as real data/)
+})
+
 test("README limits: escaped secrets are masked; domain exclude is address-shaped only", () => {
   const readme = read("README.md")
   assert.match(readme, /escaped text[^\n]*masked[^\n]*3 levels/)
