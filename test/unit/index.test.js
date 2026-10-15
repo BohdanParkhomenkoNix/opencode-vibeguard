@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import plugin, { REQUEST_HOOKS } from "../../src/index.js"
 import { tmpdir, withHome } from "../helpers/tmp.js"
@@ -18,7 +18,7 @@ async function start(t, config) {
   const project = tmpdir(t)
   withHome(t, home)
   if (config !== undefined) {
-    const body = typeof config === "string" ? config : JSON.stringify({ key_file: path.join(home, "k"), ...config })
+    const body = typeof config === "string" ? config : JSON.stringify({ key_file: path.join(home, "k"), store_file: "", ...config })
     writeFileSync(path.join(project, "vibeguard.config.json"), body)
   }
   const { hooks, ctx } = fakeCtx(project)
@@ -135,4 +135,88 @@ test("a blocked request is emptied whatever shape system and messages have", asy
   await assert.rejects(hooks.session.context(e), /vibeguard: /)
   assert.equal(e.system, "")
   assert.deepEqual(e.messages, [])
+})
+
+const MAIL = { enabled: true, store_file: "", patterns: { builtin: ["email"] } }
+const MADE = "bot@madeup.io"
+const storeOf = (home) => path.join(home, ".local", "share", "opencode", "vibeguard.store")
+
+/** Like start, but in a given home, so two plugin instances can share one store. */
+async function startIn(t, home, config) {
+  withHome(t, home)
+  const project = tmpdir(t)
+  writeFileSync(path.join(project, "vibeguard.config.json"), JSON.stringify({ key_file: path.join(home, "k"), ...config }))
+  const { hooks, ctx } = fakeCtx(project)
+  await plugin.setup(ctx)
+  return hooks
+}
+
+test("a placeholder restores in a new plugin instance that shares the store", async (t) => {
+  const home = tmpdir(t)
+  const first = await startIn(t, home, ON)
+  const e = event(`token ${SECRET}`)
+  await first.session.context(e)
+  const ph = e.messages[0].content[0].text.match(/__VG_TEST_[0-9a-f]{12}__/)[0]
+  assert.ok(existsSync(storeOf(home)))
+  assert.ok(!readFileSync(storeOf(home), "utf8").includes(SECRET))
+  const second = await startIn(t, home, ON)
+  const shell = { tool: "shell", sessionID: "s9", input: { command: `echo ${ph}` } }
+  await second.tool["execute.before"](shell)
+  assert.equal(shell.input.command, `echo ${SECRET}`)
+})
+
+test("store_file \"\" keeps everything in memory", async (t) => {
+  const home = tmpdir(t)
+  const hooks = await startIn(t, home, { ...ON, store_file: "" })
+  await hooks.session.context(event(`token ${SECRET}`))
+  assert.equal(existsSync(storeOf(home)), false)
+})
+
+test("a value the model wrote is neither masked nor blocked in its session, and is in another", async (t) => {
+  const hooks = await startIn(t, tmpdir(t), MAIL)
+  const write = { tool: "write", sessionID: "s1", input: { path: "a.txt", content: `contact ${MADE}` } }
+  await hooks.tool["execute.before"](write)
+  assert.equal(write.input.content, `contact ${MADE}`)
+  const readBack = { sessionID: "s1", system: [], messages: [{ role: "tool", content: [{ type: "tool-result", id: "c", name: "read", result: { type: "text", value: `1: contact ${MADE}` } }] }] }
+  await hooks.session.context(readBack)
+  assert.equal(readBack.messages[0].content[0].result.value, `1: contact ${MADE}`)
+  const req = (sessionID) => ({ sessionID, kind: "primary", request: new Request("http://x/v1/chat/completions", { method: "POST", body: JSON.stringify({ messages: [{ role: "tool", content: `1: contact ${MADE}` }] }) }) })
+  await hooks.session["http.request"](req("s1"))
+  await assert.rejects(hooks.session["http.request"](req("s2")), /plaintext EMAIL/)
+  const other = { sessionID: "s2", system: [], messages: [{ role: "user", content: [{ type: "text", text: MADE }] }] }
+  await hooks.session.context(other)
+  assert.match(other.messages[0].content[0].text, /__VG_EMAIL_[0-9a-f]{12}__/)
+})
+
+test("websearch input is learned from but not restored", async (t) => {
+  const hooks = await startIn(t, tmpdir(t), MAIL)
+  const search = { tool: "websearch", sessionID: "s1", input: { query: `who is ${MADE}` } }
+  await hooks.tool["execute.before"](search)
+  assert.equal(search.input.query, `who is ${MADE}`)
+  const readBack = { sessionID: "s1", system: [], messages: [{ role: "user", content: [{ type: "text", text: MADE }] }] }
+  await hooks.session.context(readBack)
+  assert.equal(readBack.messages[0].content[0].text, MADE)
+})
+
+test("a subagent spawned with a made-up value sees it unmasked", async (t) => {
+  const hooks = await startIn(t, tmpdir(t), MAIL)
+  const prompt = `Email ${MADE} the report`
+  await hooks.tool["execute.before"]({ tool: "subagent", sessionID: "parent", input: { agent: "general", description: "d", prompt } })
+  const child = { sessionID: "child", system: [], messages: [{ role: "user", content: [{ type: "text", text: `You are a subagent spawned by another session.\n${prompt}` }] }] }
+  await hooks.session.context(child)
+  assert.ok(child.messages[0].content[0].text.includes(MADE))
+  const stranger = { sessionID: "stranger", system: [], messages: [{ role: "user", content: [{ type: "text", text: `You are a subagent spawned by another session.\nEmail ${MADE} now` }] }] }
+  await hooks.session.context(stranger)
+  assert.ok(!stranger.messages[0].content[0].text.includes(MADE))
+})
+
+test("a corrupt store is moved aside and the plugin still guards", async (t) => {
+  const home = tmpdir(t)
+  mkdirSync(path.dirname(storeOf(home)), { recursive: true })
+  writeFileSync(storeOf(home), "garbage")
+  const hooks = await startIn(t, home, ON)
+  const e = event(`token ${SECRET}`)
+  await hooks.session.context(e)
+  assert.ok(!JSON.stringify(e).includes(SECRET))
+  assert.ok(readdirSync(path.dirname(storeOf(home))).some((n) => n.startsWith("vibeguard.store.corrupt-")))
 })
