@@ -59,13 +59,34 @@ test("an env path to a missing file is an error that names the path only", async
   })
 })
 
-test("defaults: 24h ttl, default key, __VG_ prefix", async (t) => {
+test("defaults: 30d ttl, default key and store, __VG_ prefix", async (t) => {
   const { home, project, write, global } = setup(t)
   write(global, { enabled: true })
   const cfg = await loadConfig(project)
-  assert.equal(cfg.ttlMs, 24 * 60 * 60 * 1000)
+  assert.equal(cfg.ttlMs, 30 * 24 * 60 * 60 * 1000)
   assert.equal(cfg.prefix, "__VG_")
   assert.equal(cfg.keyFile, path.join(home, ".config", "opencode", "vibeguard.key"))
+  assert.equal(cfg.storeFile, path.join(home, ".local", "share", "opencode", "vibeguard.store"))
+})
+
+test("store_file resolves next to its config, expands ~, and \"\" turns the store off", async (t) => {
+  const { home, project, write } = setup(t)
+  const local = path.join(project, "vibeguard.config.json")
+  write(local, { enabled: true, store_file: "data/vg.store" })
+  assert.equal((await loadConfig(project)).storeFile, path.join(project, "data", "vg.store"))
+  write(local, { enabled: true, store_file: "~/vg.store" })
+  assert.equal((await loadConfig(project)).storeFile, path.join(home, "vg.store"))
+  write(local, { enabled: true, store_file: "" })
+  assert.equal((await loadConfig(project)).storeFile, "")
+  write(local, { enabled: true, store_file: 5 })
+  await assert.rejects(loadConfig(project), /store_file must be a string/)
+})
+
+test("no config at all still names the default store", async (t) => {
+  const { home, project } = setup(t)
+  const cfg = await loadConfig(project)
+  assert.equal(cfg.enabled, false)
+  assert.equal(cfg.storeFile, path.join(home, ".local", "share", "opencode", "vibeguard.store"))
 })
 
 test("key_file is resolved next to its config and expands ~", async (t) => {

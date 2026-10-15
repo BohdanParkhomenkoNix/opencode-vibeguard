@@ -2,7 +2,7 @@ import { redactText } from "./engine.js"
 import { escapedForms, escapedViews } from "./escapes.js"
 import { knownMatcher, mapGaps } from "./known.js"
 import { restoreText } from "./restore.js"
-import { getPlaceholderRegex } from "./session.js"
+import { getPlaceholderRegex, placeholderHash } from "./session.js"
 
 /**
  * String fields that identify things rather than carry content. Rewriting them would break
@@ -21,6 +21,7 @@ export const SKIP_KEYS = new Set([
 export const PAYLOAD_KEYS = new Set(["input", "result"])
 
 const NO_SKIP = new Set()
+const NEVER = () => false
 
 function walkable(value) {
   return value !== null && typeof value === "object" && !ArrayBuffer.isView(value) && !(value instanceof Date) && !(value instanceof RegExp)
@@ -75,10 +76,11 @@ function matchesIn(text, patterns) {
  * the rules match whole in the raw gap keeps its own mapping, and only a spelling the raw rules
  * would split takes the decoded value's placeholder. Returns needle -> placeholder.
  */
-function learnFromViews(gap, patterns, session) {
+function learnFromViews(gap, patterns, session, skip) {
   const kept = []
   for (const view of escapedViews(gap)) {
     for (const { original, category } of matchesIn(view, patterns)) {
+      if (skip(original)) continue
       const needles = [original, ...escapedForms(original)].filter((n) => gap.includes(n))
       if (needles.length > 0) kept.push({ original, category, needles })
     }
@@ -108,29 +110,53 @@ function learnFromViews(gap, patterns, session) {
  * Values learned from the views are replaced in every escaped form first, then the rules run on
  * what is left of the raw text. In the other order a rule whose class includes `/` masks only the
  * part of `abc\/def…` after the backslash, and `abc\/` reaches the provider.
+ * A match `skip` accepts (a value the model made up) is left as it is: replacing it with itself.
  */
-function rulePass(root, patterns, session) {
+function rulePass(root, patterns, session, skip = NEVER) {
   const placeholders = getPlaceholderRegex(session.prefix)
+  const masker = skip === NEVER ? session : {
+    prefix: session.prefix,
+    getOrCreatePlaceholder: (original, category) => (skip(original) ? original : session.getOrCreatePlaceholder(original, category)),
+  }
   return mapStrings(root, (text) => mapGaps(text, placeholders, (gap) => {
-    const learned = learnFromViews(gap, patterns, session)
+    const learned = learnFromViews(gap, patterns, session, skip)
     const masked = learned.size === 0 ? gap : knownMatcher([...learned.keys()]).replaceIn(gap, placeholders, (found) => learned.get(found))
-    return mapGaps(masked, placeholders, (rest) => redactText(rest, patterns, session).text)
+    return mapGaps(masked, placeholders, (rest) => redactText(rest, patterns, masker).text)
   }), SKIP_KEYS)
+}
+
+/** The placeholder map's values and every escaped form of them, needle -> original. */
+function knownNeedles(session, skipEntry = NEVER) {
+  const originalOf = new Map()
+  for (const [original, placeholder] of session.knownEntries()) {
+    if (!original || skipEntry(original, placeholder)) continue
+    originalOf.set(original, original)
+    for (const form of escapedForms(original)) if (!originalOf.has(form)) originalOf.set(form, original)
+  }
+  return originalOf
+}
+
+const indexes = new WeakMap()
+
+/** The index of every known value; reused while the session's `version` stays the same. */
+function knownIndex(session) {
+  const cached = indexes.get(session)
+  if (cached && typeof session.version === "number" && cached.version === session.version) return cached
+  const originalOf = knownNeedles(session)
+  const index = { version: session.version, originalOf, matcher: knownMatcher([...originalOf.keys()]) }
+  indexes.set(session, index)
+  return index
 }
 
 /**
  * Replaces every value the session already knows, and every escaped form of it, with its
  * existing placeholder, longest first. A context rule (a lookbehind) learns a value from one
  * occurrence, but the same value turns up bare or escaped in tool output, and the guard blocks
- * any known value it finds.
+ * any known value it finds. An entry `skipEntry` accepts (made up by the model here) is left,
+ * and is left out of the matcher, as the guard leaves it out.
  */
-function knownPass(root, session) {
-  const originalOf = new Map()
-  for (const [original] of session.knownEntries()) {
-    if (!original) continue
-    originalOf.set(original, original)
-    for (const form of escapedForms(original)) if (!originalOf.has(form)) originalOf.set(form, original)
-  }
+function knownPass(root, session, skipEntry = NEVER) {
+  const originalOf = knownNeedles(session, skipEntry)
   if (originalOf.size === 0) return 0
   const known = knownMatcher([...originalOf.keys()])
   const placeholders = getPlaceholderRegex(session.prefix)
@@ -142,14 +168,78 @@ export function redactStrings(root, patterns, session) {
   return rulePass(root, patterns, session) + knownPass(root, session)
 }
 
+const ALNUM = /[A-Za-z0-9]/
+const VALUE_CHAR = /[A-Za-z0-9_%+@-]/
+
 /**
- * Redacts several trees of one request. The known-value pass runs only after every rule pass,
- * because a bare value can sit in a tree walked before the tree where a rule first learns it.
+ * Whether text[offset, offset + length) stands as a whole token: the character before and the
+ * one after are not part of a value. A `.` is part of a value only next to a letter or digit,
+ * so `10.20.0.50` does not hold `10.20.0.5`, while a sentence-end `.` does not extend a value.
  */
-export function redactRequest(roots, patterns, session) {
+function isWholeToken(text, offset, length) {
+  const end = offset + length
+  const before = text[offset - 1]
+  const after = text[end]
+  if (before !== undefined && (VALUE_CHAR.test(before) || (before === "." && ALNUM.test(text[offset - 2] ?? "")))) return false
+  if (after !== undefined && (VALUE_CHAR.test(after) || (after === "." && ALNUM.test(text[end + 1] ?? "")))) return false
+  return true
+}
+
+/**
+ * Writes the class of every value in root to the origin journal of origin.sessionId: "model" for
+ * the model's own output, "input" for anything sent to it. A value is a rule match, in the raw text
+ * or in an escaped view, or a value of the placeholder map in any escaped form (`known`, rebuilt
+ * only when the map changes, `PlaceholderSession.version`; in model output a known value counts only as a whole token, as the model never wrote
+ * a substring of a longer value as a value). Placeholders are not scanned. A value the session's chain already holds keeps its
+ * class. Wrap a tool input as `{ input }` so every key of it is content.
+ * @param {"model" | "input"} kind
+ * @param {{ sessionId: string, tracker: import("./origin.js").OriginTracker }} origin
+ */
+export function classify(root, kind, patterns, session, origin, known = knownIndex(session)) {
+  const mark = kind === "model"
+    ? (value) => origin.tracker.markModelMade(origin.sessionId, value)
+    : (value) => origin.tracker.markInput(origin.sessionId, value)
+  const placeholders = getPlaceholderRegex(session.prefix)
+  mapStrings(root, (text) => {
+    mapGaps(text, placeholders, (gap) => {
+      for (const view of [gap, ...escapedViews(gap)]) {
+        for (const { original } of matchesIn(view, patterns)) mark(original)
+      }
+      known.matcher.replaceIn(gap, placeholders, (found, offset, text) => {
+        if (kind === "input" || isWholeToken(text, offset, found.length)) mark(known.originalOf.get(found))
+        return found
+      })
+      return gap
+    })
+    return text
+  }, SKIP_KEYS)
+}
+
+const isNode = (value) => value !== null && typeof value === "object"
+const itemsOf = (root) => (Array.isArray(root) && root.every(isNode) ? root : [root])
+
+/**
+ * Redacts several trees of one request. First every item is classified in history order (system,
+ * then each message): an `assistant` message is the model's output, anything else is input, and
+ * the first sighting in the session's chain decides. Then the rules and the known-value pass mask
+ * everything but the values model-made in this session. Without `origin` (no session id) nothing
+ * is classified and nothing is model-made. The known-value pass runs only after every rule pass,
+ * because a bare value can sit in a tree walked before the tree where a rule first learns it.
+ * @param {unknown[]} roots
+ * @param {{ sessionId: string, tracker: import("./origin.js").OriginTracker }} [origin]
+ */
+export function redactRequest(roots, patterns, session, origin) {
+  if (origin) {
+    const known = knownIndex(session)
+    for (const root of roots) {
+      for (const item of itemsOf(root)) classify(item, item?.role === "assistant" ? "model" : "input", patterns, session, origin, known)
+    }
+  }
+  const skip = origin ? (original) => origin.tracker.isModelMade(origin.sessionId, original) : NEVER
+  const skipEntry = origin ? (_original, placeholder) => origin.tracker.isModelMadeHash(origin.sessionId, placeholderHash(placeholder)) : NEVER
   let changed = 0
-  for (const root of roots) changed += rulePass(root, patterns, session)
-  for (const root of roots) changed += knownPass(root, session)
+  for (const root of roots) for (const item of itemsOf(root)) changed += rulePass(item, patterns, session, skip)
+  for (const root of roots) changed += knownPass(root, session, skipEntry)
   return changed
 }
 

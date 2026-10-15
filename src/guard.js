@@ -2,7 +2,7 @@ import { redactText } from "./engine.js"
 import { escapedViews } from "./escapes.js"
 import { knownMatcher } from "./known.js"
 import { mapStrings } from "./messages.js"
-import { getPlaceholderRegex } from "./session.js"
+import { getPlaceholderRegex, placeholderHash } from "./session.js"
 
 const MAX_JSON_DEPTH = 3
 
@@ -57,13 +57,17 @@ function categoryOf(placeholder, prefix) {
   return placeholder.slice(prefix.length).replace(/_[0-9a-fA-F]{12}(?:_\d+)?__$/, "")
 }
 
-function leakIn(text, known, placeholderOf, patterns, prefix) {
+function leakIn(text, known, placeholderOf, patterns, session, madeHere) {
   const original = known.find(text)
-  if (original !== null) return { category: categoryOf(placeholderOf.get(original), prefix) }
+  if (original !== null) {
+    const placeholder = placeholderOf.get(original)
+    session.touch(placeholder)
+    return { category: categoryOf(placeholder, session.prefix) }
+  }
   let category = null
   redactText(text, patterns, {
-    getOrCreatePlaceholder(_original, ruleCategory) {
-      category ??= ruleCategory
+    getOrCreatePlaceholder(match, ruleCategory) {
+      if (!madeHere(match)) category ??= ruleCategory
       return ""
     },
   })
@@ -75,12 +79,19 @@ function leakIn(text, known, placeholderOf, patterns, prefix) {
  * already known to be secret, in any string of the outgoing body, also with JSON escapes undone.
  * A string that is JSON with escapes is checked with them undone only, so a value whose own text
  * is an escape spelling (`C0rp\taxes!`) is not found where the string holds the decoded character.
+ * A value the model made up in this session (`origin`) is no leak: the provider wrote it.
  * Reports the category only.
+ * @param {{ sessionId: string, tracker: import("./origin.js").OriginTracker }} [origin]
  */
-export function findLeak(bodyText, patterns, session) {
+export function findLeak(bodyText, patterns, session, origin) {
   if (!bodyText) return null
+  const madeHere = origin ? (value) => origin.tracker.isModelMade(origin.sessionId, value) : () => false
   const placeholders = getPlaceholderRegex(session.prefix)
-  const placeholderOf = new Map(session.knownEntries())
+  const placeholderOf = new Map()
+  for (const [original, placeholder] of session.knownEntries()) {
+    if (origin && origin.tracker.isModelMadeHash(origin.sessionId, placeholderHash(placeholder))) continue
+    placeholderOf.set(original, placeholder)
+  }
   const known = knownMatcher([...placeholderOf.keys()])
   for (const { text: raw, json } of stringsOf(bodyText)) {
     const text = raw.replace(placeholders, " ")
@@ -89,7 +100,7 @@ export function findLeak(bodyText, patterns, session) {
     // glues to its neighbour (`\n@pytest.fixture` reads as the email `n@pytest.fixture`), and in
     // `arguments` OpenCode writes that spelling itself, so the redaction never sees it to mask.
     for (const view of json && views.length > 0 ? views : [text, ...views]) {
-      const leak = leakIn(view, known, placeholderOf, patterns, session.prefix)
+      const leak = leakIn(view, known, placeholderOf, patterns, session, madeHere)
       if (leak) return leak
     }
   }

@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { defaultKeyFile } from "./key.js"
+import { defaultStoreFile } from "./store.js"
 
 const UNITS = { ms: 1, s: 1000, m: 60 * 1000, h: 60 * 60 * 1000, d: 24 * 60 * 60 * 1000 }
 
@@ -51,12 +52,16 @@ function normalizeConfig(raw, file) {
 
   const session = raw.session ?? {}
   if (typeof session !== "object" || Array.isArray(session)) fail(file, "session must be an object")
-  const ttlMs = parseDurationMs(session.ttl ?? "24h", file)
+  const ttlMs = parseDurationMs(session.ttl ?? "30d", file)
   const maxMappings = session.max_mappings ?? 100000
   if (!Number.isInteger(maxMappings) || maxMappings <= 0) fail(file, "session.max_mappings must be a positive integer")
 
   if (raw.key_file !== undefined && (typeof raw.key_file !== "string" || !raw.key_file)) fail(file, "key_file must be a non-empty string")
   const keyFile = raw.key_file ? path.resolve(path.dirname(file), expandHome(raw.key_file, "key_file", file)) : defaultKeyFile()
+  if (raw.store_file !== undefined && typeof raw.store_file !== "string") fail(file, "store_file must be a string")
+  // "" is the off switch: mappings then live in memory only, as in 0.2.x.
+  const storeFile = raw.store_file === undefined ? defaultStoreFile()
+    : raw.store_file === "" ? "" : path.resolve(path.dirname(file), expandHome(raw.store_file, "store_file", file))
 
   return {
     enabled: raw.enabled === true,
@@ -66,6 +71,7 @@ function normalizeConfig(raw, file) {
     maxMappings,
     patterns: raw.patterns,
     keyFile,
+    storeFile,
   }
 }
 
@@ -92,7 +98,7 @@ export async function loadConfig(directory) {
     return { ...normalizeConfig(await readJson(file), file), loadedFrom: file }
   }
   return {
-    enabled: false, debug: false, prefix: "__VG_", ttlMs: UNITS.d, maxMappings: 100000,
-    patterns: undefined, keyFile: defaultKeyFile(), loadedFrom: "",
+    enabled: false, debug: false, prefix: "__VG_", ttlMs: 30 * UNITS.d, maxMappings: 100000,
+    patterns: undefined, keyFile: defaultKeyFile(), storeFile: defaultStoreFile(), loadedFrom: "",
   }
 }

@@ -30,8 +30,33 @@ test("README documents exclude by domain, ttl 0s and key permissions", () => {
   assert.match(readme, /readable by others[^\n]*0600/)
 })
 
-test("package version is 0.2.6", () => {
-  assert.equal(JSON.parse(read("package.json")).version, "0.2.6")
+test("package version is 0.3.0", () => {
+  assert.equal(JSON.parse(read("package.json")).version, "0.3.0")
+})
+
+test("README documents the store, sliding ttl and values the model made up", () => {
+  const readme = read("README.md")
+  assert.match(readme, /`store_file`[^\n]*~\/\.local\/share\/opencode\/vibeguard\.store/)
+  assert.match(readme, /`session\.ttl`[^\n]*unused[^\n]*`30d`/)
+  assert.match(readme, /encryption[^\n]*not against a process that can read your whole home directory/)
+  assert.match(readme, /made up by the model[^\n]*not masked/)
+  assert.match(readme, /subagent whose prompt cannot be matched[^\n]*masks/)
+})
+
+test("the example config uses the 30d ttl", () => {
+  assert.equal(JSON.parse(read("vibeguard.config.json.example")).session.ttl, "30d")
+})
+
+test("the example config shows the default store_file", () => {
+  assert.equal(JSON.parse(read("vibeguard.config.json.example")).store_file, "~/.local/share/opencode/vibeguard.store")
+})
+
+test("README: a store sealed with another key is left untouched", () => {
+  assert.match(read("README.md"), /store written with another key is left untouched[^\n]*in memory[^\n]*own `store_file`/)
+})
+
+test("README limits: inputs of MCP or plugin tools are real data", () => {
+  assert.match(read("README.md"), /inputs of MCP or plugin tools[^\n]*always treated as real data/)
 })
 
 test("README limits: escaped secrets are masked; domain exclude is address-shaped only", () => {
@@ -57,4 +82,8 @@ test("README: exclude normalization, broad entries, local logs", () => {
 
 test("no orphan screenshot in the repo", () => {
   assert.equal(existsSync(new URL("../../screenshot.png", import.meta.url)), false)
+})
+
+test("README says the model-made class is per session", () => {
+  assert.match(read("README.md"), /secret in one session and made up by the model in a parallel one/)
 })

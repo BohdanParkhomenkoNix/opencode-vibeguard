@@ -2,11 +2,12 @@
   "enabled": true,
   "debug": false,
   "placeholder_prefix": "__VG_",
-  "session": { "ttl": "24h", "max_mappings": 100000 },
+  "store_file": "~/.local/share/opencode/vibeguard.store",
+  "session": { "ttl": "30d", "max_mappings": 100000 },
   "patterns": {
     "keywords": [],
     "regex": [],
     "builtin": ["openai_key", "anthropic_key", "github_token", "aws_access_key", "google_api_key", "private_key", "jwt", "email"],
-    "exclude": ["example.com", "localhost", "127.0.0.1", "0.0.0.0", "noreply@anthropic.com"]
+    "exclude": ["example.com", "localhost", "127.0.0.1", "0.0.0.0", "noreply@anthropic.com", "git@github.com", "git@gitlab.com", "git@bitbucket.org"]
   }
 }
