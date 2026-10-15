@@ -152,7 +152,8 @@ export class PlaceholderSession {
   /**
    * Takes mappings from the store. An entry that conflicts with a mapping in memory (the same
    * placeholder for another value, or the same value under another placeholder) is skipped;
-   * the same mapping keeps the later last use. Importing does not set `dirty`.
+   * the same mapping keeps the later last use. Then the map is cut to maxMappings, least
+   * recently used first. Importing does not set `dirty`: the store's own merge applies the cap.
    */
   importMappings(entries) {
     if (!Array.isArray(entries)) return
@@ -169,6 +170,18 @@ export class PlaceholderSession {
       } else if (current === original && usedAt > this.used.get(placeholder)) {
         this.used.set(placeholder, usedAt)
       }
+    }
+    this.trimToMax()
+  }
+
+  /** Drops the least recently used excess over maxMappings in one sort, not one scan per entry. */
+  trimToMax() {
+    if (!Number.isFinite(this.maxMappings) || this.maxMappings <= 0 || this.forward.size <= this.maxMappings) return
+    const byUse = [...this.used].sort((a, b) => b[1] - a[1])
+    for (const [placeholder] of byUse.slice(this.maxMappings)) {
+      this.reverse.delete(this.forward.get(placeholder))
+      this.forward.delete(placeholder)
+      this.used.delete(placeholder)
     }
   }
 }

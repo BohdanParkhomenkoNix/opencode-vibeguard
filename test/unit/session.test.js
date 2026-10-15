@@ -120,6 +120,24 @@ test("import keeps the later last use and skips malformed or conflicting entries
   s.importMappings("not a list")
 })
 
+test("an import over max_mappings keeps the most recently used, in one pass", () => {
+  const s = make(KEY_A, { ttlMs: 0, maxMappings: 10000 })
+  const t0 = Date.now()
+  const ph = (i) => `__VG_T_${i.toString(16).padStart(12, "0")}__`
+  // Entry i was used at t0 - 100000 + i; the import order is a fixed shuffle of i.
+  const entries = Array.from({ length: 100000 }, (_, k) => (k * 7919) % 100000).map((i) => [ph(i), `value-${i}`, t0 - 100000 + i])
+  const started = performance.now()
+  s.importMappings(entries)
+  assert.equal(s.exportMappings().length, 10000)
+  assert.equal(s.lookup(ph(89999), t0 - 1), undefined)
+  for (const i of [90000, 95000, 99999]) assert.equal(s.lookup(ph(i), t0 - 100000 + i), `value-${i}`)
+  s.getOrCreatePlaceholder("fresh", "t")
+  const elapsed = performance.now() - started
+  assert.equal(s.exportMappings().length, 10000)
+  assert.equal(s.lookupReverse("fresh") !== undefined, true)
+  assert.ok(elapsed < 1000, `import and the next placeholder took ${elapsed.toFixed(0)} ms`)
+})
+
 test("dirty is set by a change and cleared by the caller", () => {
   const s = make()
   assert.equal(s.dirty, false)
