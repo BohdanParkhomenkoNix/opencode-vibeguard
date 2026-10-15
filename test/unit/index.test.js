@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import plugin, { LEARN_TOOLS, REQUEST_HOOKS } from "../../src/index.js"
+import plugin, { EXECUTE_IDS, LEARN_TOOLS, REQUEST_HOOKS } from "../../src/index.js"
 import { tmpdir, withHome } from "../helpers/tmp.js"
 
 const SECRET = "vg-unit-Secret-91"
@@ -215,16 +215,51 @@ test("a Code Mode inner call named like a built-in is still real data: it shares
   const REAL = "jane.doe@realcorp.io"
   const hooks = await startIn(t, tmpdir(t), MAIL)
   // An MCP server `apply` with a tool `patch`, called from the script (docs/v2-facts.md F12).
-  await hooks.tool["execute.before"]({ tool: "execute", sessionID: "s1", id: "call_7", input: { code: "await tools.apply.patch(await tools.crm.find())" } })
-  await hooks.tool["execute.before"]({ tool: "apply_patch", sessionID: "s1", id: "call_7", input: { to: REAL } })
+  await hooks.tool["execute.before"]({ tool: "execute", sessionID: "s1", messageID: "m1", id: "call_7", input: { code: "await tools.apply.patch(await tools.crm.find())" } })
+  await hooks.tool["execute.before"]({ tool: "apply_patch", sessionID: "s1", messageID: "m1", id: "call_7", input: { to: REAL } })
   const result = { sessionID: "s1", system: [], messages: [{ role: "tool", content: [{ type: "tool-result", id: "call_7", name: "execute", result: { type: "text", value: `patched ${REAL}` } }] }] }
   await hooks.session.context(result)
   assert.ok(!JSON.stringify(result).includes(REAL))
   // The model's own call under another id still teaches.
-  await hooks.tool["execute.before"]({ tool: "write", sessionID: "s1", id: "call_8", input: { path: "a.txt", content: MADE } })
+  await hooks.tool["execute.before"]({ tool: "write", sessionID: "s1", messageID: "m2", id: "call_8", input: { path: "a.txt", content: MADE } })
   const readBack = { sessionID: "s1", system: [], messages: [{ role: "user", content: [{ type: "text", text: MADE }] }] }
   await hooks.session.context(readBack)
   assert.equal(readBack.messages[0].content[0].text, MADE)
+})
+
+test("an inner call still restores placeholders, and the restored value stays a secret", async (t) => {
+  const REAL = "jane.doe@realcorp.io"
+  const hooks = await startIn(t, tmpdir(t), MAIL)
+  const first = { sessionID: "s1", system: [], messages: [{ role: "user", content: [{ type: "text", text: REAL }] }] }
+  await hooks.session.context(first)
+  const ph = first.messages[0].content[0].text
+  await hooks.tool["execute.before"]({ tool: "execute", sessionID: "s1", messageID: "m1", id: "call_7", input: { code: "" } })
+  const inner = { tool: "apply_patch", sessionID: "s1", messageID: "m1", id: "call_7", input: { to: ph } }
+  await hooks.tool["execute.before"](inner)
+  assert.equal(inner.input.to, REAL)
+  const later = { sessionID: "s1", system: [], messages: [{ role: "assistant", content: [{ type: "text", text: REAL }] }] }
+  await hooks.session.context(later)
+  assert.ok(!JSON.stringify(later).includes(REAL))
+})
+
+test("an execute call id silences only the same session and message, and only the last EXECUTE_IDS of them", async (t) => {
+  const hooks = await startIn(t, tmpdir(t), MAIL)
+  const fire = (e) => hooks.tool["execute.before"]({ input: { code: "" }, ...e })
+  const learned = async (sessionID, value) => {
+    const e = { sessionID, system: [], messages: [{ role: "user", content: [{ type: "text", text: value }] }] }
+    await hooks.session.context(e)
+    return e.messages[0].content[0].text === value
+  }
+  await fire({ tool: "execute", sessionID: "s1", messageID: "m1", id: "call_1" })
+  await fire({ tool: "write", sessionID: "s2", messageID: "m1", id: "call_1", input: { path: "a", content: "a2@madeup.io" } })
+  assert.ok(await learned("s2", "a2@madeup.io"), "another session")
+  await fire({ tool: "write", sessionID: "s1", messageID: "m9", id: "call_1", input: { path: "a", content: "a9@madeup.io" } })
+  assert.ok(await learned("s1", "a9@madeup.io"), "another message")
+  for (let i = 0; i < EXECUTE_IDS; i++) await fire({ tool: "execute", sessionID: "s3", messageID: "m", id: `x${i}` })
+  await fire({ tool: "write", sessionID: "s1", messageID: "m1", id: "call_1", input: { path: "a", content: "old@madeup.io" } })
+  assert.ok(await learned("s1", "old@madeup.io"), "the oldest id is forgotten")
+  await fire({ tool: "write", sessionID: "s3", messageID: "m", id: `x${EXECUTE_IDS - 1}`, input: { path: "a", content: "new@madeup.io" } })
+  assert.ok(!(await learned("s3", "new@madeup.io")), "a recent id still marks an inner call")
 })
 
 test("LEARN_TOOLS names the built-in tools whose input the model writes itself", () => {

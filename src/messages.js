@@ -188,8 +188,8 @@ function isWholeToken(text, offset, length) {
 /**
  * Writes the class of every value in root to the origin journal of origin.sessionId: "model" for
  * the model's own output, "input" for anything sent to it. A value is a rule match, in the raw text
- * or in an escaped view, or a value of the placeholder map in any escaped form (`known`, built once
- * per request; in model output a known value counts only as a whole token, as the model never wrote
+ * or in an escaped view, or a value of the placeholder map in any escaped form (`known`, rebuilt
+ * only when the map changes, `PlaceholderSession.version`; in model output a known value counts only as a whole token, as the model never wrote
  * a substring of a longer value as a value). Placeholders are not scanned. A value the session's chain already holds keeps its
  * class. Wrap a tool input as `{ input }` so every key of it is content.
  * @param {"model" | "input"} kind

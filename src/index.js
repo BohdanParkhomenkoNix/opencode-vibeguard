@@ -119,17 +119,14 @@ async function setup(ctx) {
   const changed = () => {
     if (state.saver && (state.session.dirty || state.tracker.dirty)) state.saver.request()
   }
-  // A Code Mode inner call carries the id of its outer `execute` call (docs/v2-facts.md F12).
+  // A Code Mode inner call carries the message and call id of its outer `execute` call (docs/v2-facts.md F12).
   const executeIds = new Set()
-  const isInnerCall = (event) => {
-    const key = `${event.sessionID}\u0000${event.id}`
-    if (event.tool === "execute") {
-      executeIds.add(key)
-      if (executeIds.size > EXECUTE_IDS) executeIds.delete(executeIds.values().next().value)
-      return false
-    }
-    return event.id !== undefined && executeIds.has(key)
+  const callKey = (event) => `${event.sessionID}\u0000${event.messageID}\u0000${event.id}`
+  const rememberExecute = (event) => {
+    executeIds.add(callKey(event))
+    if (executeIds.size > EXECUTE_IDS) executeIds.delete(executeIds.values().next().value)
   }
+  const isInnerCall = (event) => event.tool !== "execute" && event.id !== undefined && executeIds.has(callKey(event))
 
   for (const name of REQUEST_HOOKS) {
     await ctx.session.hook(name, async (event) => {
@@ -163,6 +160,7 @@ async function setup(ctx) {
     ready()
     const origin = originOf(event.sessionID)
     // Read before restore: the input is still exactly what the model wrote.
+    if (event.tool === "execute") rememberExecute(event)
     if (origin && LEARN_TOOLS.has(event.tool) && !isInnerCall(event)) classify({ input: event.input }, "model", state.patterns, state.session, origin)
     if (!NO_RESTORE_TOOLS.has(event.tool)) {
       // The model was shown only the placeholder: the value behind it reached it as input.
